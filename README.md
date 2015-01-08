@@ -35,3 +35,11 @@ Samples with executable can be download from [here](https://pixellib.googlecode.
 
 ![Image Warp](https://raw.githubusercontent.com/skywind3000/pixellib/master/images/Pixellib_quality.png)
 
+
+Donation
+--------
+![Donation QR](https://raw.githubusercontent.com/skywind3000/kcp/master/donation.png)
+
+Call for donation to help improve performance and quality, scan QR code of alipay to donate.
+
+
