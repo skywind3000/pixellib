@@ -958,7 +958,7 @@ void ipixel_palette_store(unsigned char *dst, int w, const IUINT32 *card,
             (a) = _ipixel_scale_5[((x) >> 11) & 0x1f]; \
             (b) = _ipixel_scale_5[((x) >>  6) & 0x1f]; \
             (c) = _ipixel_scale_5[((x) >>  1) & 0x1f]; \
-            (d) = _ipixel_scale_5[((x) >>  0) & 0x01]; \
+            (d) = _ipixel_scale_1[((x) >>  0) & 0x01]; \
         }   while (0)
 
 #define _ipixel_disasm_555X(x, a, b, c) do { \
