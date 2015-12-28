@@ -388,7 +388,7 @@ extern unsigned char _ipixel_divlut[256][256];  /* [x][y] = y * 255 / x */
 
 #define IPIXEL_ACCESS_MODE_NORMAL		0		/* fast mode, with lut */
 #define IPIXEL_ACCESS_MODE_ACCURATE		1		/* fast mode without lut */
-#define IPIXEL_ACCESS_MODE_DEFAULT		2		/* default accurate */
+#define IPIXEL_ACCESS_MODE_BUILTIN		2		/* default accurate */
 
 /* get color fetching procedure */
 iFetchProc ipixel_get_fetch(int pixfmt, int access_mode);
@@ -419,6 +419,9 @@ IUINT32 ipixel_assemble(int pixfmt, int r, int g, int b, int a);
 /* get r, g, b, a from color */
 void ipixel_desemble(int pixfmt, IUINT32 c, IINT32 *r, IINT32 *g, 
 	IINT32 *b, IINT32 *a);
+
+/* stand along memcpy */
+void *ipixel_memcpy(void *dst, const void *src, size_t size);
 	
 
 /* returns pixel format names */
@@ -435,16 +438,17 @@ typedef void (*iSpanDrawProc)(void *bits, int startx, int w,
 	const IUINT32 *card, const IUINT8 *cover, const iColorIndex *index);
 
 /* get a span drawing function with given pixel format */
-iSpanDrawProc ipixel_get_span_proc(int fmt, int isadditive, int usedefault);
+iSpanDrawProc ipixel_get_span_proc(int fmt, int op, int builtin);
 
 /* set a span drawing function */
-void ipixel_set_span_proc(int fmt, int isadditive, iSpanDrawProc proc);
+void ipixel_set_span_proc(int fmt, int op, iSpanDrawProc proc);
 
 
 /* blending options */
 #define IPIXEL_BLEND_OP_COPY		0
 #define IPIXEL_BLEND_OP_BLEND		1
-#define IPIXEL_BLEND_OP_ADD			2
+#define IPIXEL_BLEND_OP_SRCOVER		2
+#define IPIXEL_BLEND_OP_ADD			3
 
 #define IPIXEL_FLIP_NONE			0
 #define IPIXEL_FLIP_HFLIP			1
@@ -1057,7 +1061,7 @@ void ipixel_palette_store(unsigned char *dst, int w, const IUINT32 *card,
 #define _ipixel_norm(color) (((color) >> 7) + (color))
 #define _ipixel_unnorm(color) ((((color) << 8) - (color)) >> 8)
 #define _imul_y_div_255(x, y) (((x) * _ipixel_norm(y)) >> 8)
-#define _idiv_255(x) (((x) + (((x) + 257) >> 8)) >> 8)
+#define _ipixel_fast_div_255(x) (((x) + (((x) + 257) >> 8)) >> 8)
 
 #define _ipixel_to_gray(r, g, b) \
         ((19595 * (r) + 38469 * (g) + 7472 * (b)) >> 16)
@@ -2239,6 +2243,18 @@ extern IUINT32 _ipixel_cvt_lut_B2G2R2A2[256];
 		(db) = (((((IINT32)(sb)) - ((IINT32)(db))) * SA) >> 8) + (db); \
 	}	while (0)
 
+/* premultiplied src over */
+#define IBLEND_SRCOVER(sr, sg, sb, sa, dr, dg, db, da) do { \
+		IUINT32 SA = 255 - (sa); \
+		(dr) = (dr) * SA; \
+		(dg) = (dg) * SA; \
+		(db) = (db) * SA; \
+		(da) = (da) * SA; \
+		(dr) = _ipixel_fast_div_255(dr) + (sr); \
+		(dg) = _ipixel_fast_div_255(dg) + (sg); \
+		(db) = _ipixel_fast_div_255(db) + (sb); \
+		(da) = _ipixel_fast_div_255(da) + (sa); \
+	}	while (0)
 
 /* additive blend */
 #define IBLEND_ADDITIVE(sr, sg, sb, sa, dr, dg, db, da) do { \

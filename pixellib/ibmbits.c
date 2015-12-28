@@ -279,6 +279,8 @@ unsigned char ipixel_blend_lut[2048 * 2];
 unsigned char _ipixel_mullut[256][256];   /* [x][y] = x * y / 255 */
 unsigned char _ipixel_divlut[256][256];   /* [x][y] = y * 255 / x */
 
+/* memcpy hook */
+void *(*ipixel_memcpy_hook)(void *dst, const void *src, size_t size) = NULL;
 
 #if defined(__BORLANDC__) && !defined(__MSDOS__)
 	#pragma warn -8004  
@@ -381,6 +383,30 @@ void ipixel_desemble(int pixfmt, IUINT32 c, IINT32 *r, IINT32 *g,
 	*g = G;
 	*b = B;
 	*a = A;
+}
+
+
+/* stand along memcpy */
+void *ipixel_memcpy(void *dst, const void *src, size_t size)
+{
+	if (ipixel_memcpy_hook) {
+		return ipixel_memcpy_hook(dst, src, size);
+	}
+
+#ifndef IPIXEL_NO_MEMCPY
+	return memcpy(dst, src, size);
+#else
+	unsigned char *dd = (unsigned char*)dst;
+	const unsigned char *ss = (const unsigned char*)src;
+	for (; size >= 8; size -= 8) {
+		*(IUINT32*)(dd + 0) = *(const IUINT32*)(ss + 0);
+		*(IUINT32*)(dd + 4) = *(const IUINT32*)(ss + 4);
+		dd += 8;
+		ss += 8;
+	}
+	for (; size > 0; size--) *dd++ = *ss++;
+	return dst;		
+#endif
 }
 
 
@@ -544,6 +570,7 @@ static void _istore_proc_##fmt(void *bits, const IUINT32 *values, \
         }, \
         w); \
     _ipixel_dst_index = _ipixel_dst_index; \
+	c1 = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2 + c2; \
 }
 
 
@@ -568,7 +595,7 @@ static IUINT32 _ifetch_pixel_##fmt(const void *bits, \
 static void _ifetch_proc_A8R8G8B8(const void *bits, int x, 
 	int w, IUINT32 *buffer, const iColorIndex *idx)
 {
-	memcpy(buffer, (const IUINT32*)bits + x, w * sizeof(IUINT32));
+	ipixel_memcpy(buffer, (const IUINT32*)bits + x, w * sizeof(IUINT32));
 }
 
 static void _ifetch_proc_A8B8G8R8(const void *bits, int x,
@@ -738,7 +765,7 @@ IFETCH_PROC(A1, 1)
 static void _istore_proc_A8R8G8B8(void *bits, 
 	const IUINT32 *values, int x, int w, const iColorIndex *idx)
 {
-	memcpy(((IUINT32*)bits) + x, values, w * sizeof(IUINT32));
+	ipixel_memcpy(((IUINT32*)bits) + x, values, w * sizeof(IUINT32));
 }
 
 static void _istore_proc_A8B8G8R8(void *bits,
@@ -1126,9 +1153,9 @@ IFETCH_PIXEL(A1, 1)
  **********************************************************************/
 struct iPixelAccessProc
 {
-    iFetchProc fetch, fetch_default;
-    iStoreProc store, store_default;
-    iFetchPixelProc fetchpixel, fetchpixel_default;
+    iFetchProc fetch, fetch_builtin;
+    iStoreProc store, store_builtin;
+    iFetchPixelProc fetchpixel, fetchpixel_builtin;
 };
 
 #define ITABLE_ITEM(fmt) { \
@@ -1223,7 +1250,7 @@ void ipixel_set_proc(int pixfmt, int type, void *proc)
 			ipixel_access_proc[pixfmt].fetch = (iFetchProc)proc;
 		}	else {
 			ipixel_access_proc[pixfmt].fetch = 
-				ipixel_access_proc[pixfmt].fetch_default;
+				ipixel_access_proc[pixfmt].fetch_builtin;
 		}
 	}
 	else if (type == IPIXEL_PROC_TYPE_STORE) {
@@ -1231,7 +1258,7 @@ void ipixel_set_proc(int pixfmt, int type, void *proc)
 			ipixel_access_proc[pixfmt].store = (iStoreProc)proc;
 		}	else {
 			ipixel_access_proc[pixfmt].store = 
-				ipixel_access_proc[pixfmt].store_default;
+				ipixel_access_proc[pixfmt].store_builtin;
 		}
 	}
 	else if (type == IPIXEL_PROC_TYPE_FETCHPIXEL) {
@@ -1239,7 +1266,7 @@ void ipixel_set_proc(int pixfmt, int type, void *proc)
 			ipixel_access_proc[pixfmt].fetchpixel = (iFetchPixelProc)proc;
 		}	else {
 			ipixel_access_proc[pixfmt].fetchpixel = 
-				ipixel_access_proc[pixfmt].fetchpixel_default;
+				ipixel_access_proc[pixfmt].fetchpixel_builtin;
 		}
 	}
 }
@@ -1457,7 +1484,7 @@ void ipixel_lut_init(void)
 	for (i = 0; i < 256; i++) {
 		for (j = 0; j < 256; j++) {
 			k = i * j;
-			_ipixel_mullut[i][j] = (IUINT8)_idiv_255(k);
+			_ipixel_mullut[i][j] = (IUINT8)_ipixel_fast_div_255(k);
 		}
 	}
 	for (i = 0; i < 256; i++) {
@@ -1487,7 +1514,7 @@ iFetchProc ipixel_get_fetch(int pixfmt, int access_mode)
 	if (access_mode == IPIXEL_ACCESS_MODE_ACCURATE) {
 		return ipixel_access_proc[pixfmt].fetch;
 	}
-	return ipixel_access_proc[pixfmt].fetch_default;
+	return ipixel_access_proc[pixfmt].fetch_builtin;
 }
 
 /* get color storing procedure */
@@ -1502,7 +1529,7 @@ iStoreProc ipixel_get_store(int pixfmt, int access_mode)
 	if (access_mode == IPIXEL_ACCESS_MODE_ACCURATE) {
 		return ipixel_access_proc[pixfmt].store;
 	}
-	return ipixel_access_proc[pixfmt].store_default;
+	return ipixel_access_proc[pixfmt].store_builtin;
 }
 
 /* get color pixel fetching procedure */
@@ -1519,7 +1546,7 @@ iFetchPixelProc ipixel_get_fetchpixel(int pixfmt, int access_mode)
 	if (access_mode == IPIXEL_ACCESS_MODE_ACCURATE) {
 		return ipixel_access_proc[pixfmt].fetchpixel;
 	}
-	return ipixel_access_proc[pixfmt].fetchpixel_default;
+	return ipixel_access_proc[pixfmt].fetchpixel_builtin;
 }
 
 
@@ -1579,8 +1606,58 @@ static void ipixel_span_draw_proc_##fmt##_0(void *bits, \
 			dst += nbytes; \
 		} \
 	} \
+	cc = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2; \
 } \
 static void ipixel_span_draw_proc_##fmt##_1(void *bits, \
+	int offset, int w, const IUINT32 *card, const IUINT8 *cover, \
+	const iColorIndex *_ipixel_src_index) \
+{ \
+	unsigned char *dst = ((unsigned char*)bits) + offset * nbytes; \
+	IUINT32 cc, r1, g1, b1, a1, r2, g2, b2, a2, inc; \
+	if (cover == NULL) { \
+		for (inc = w; inc > 0; inc--) { \
+			_ipixel_load_card(card, r1, g1, b1, a1); \
+			if (a1 == 255) { \
+				cc = IRGBA_TO_PIXEL(fmt, r1, g1, b1, 255); \
+				_ipixel_store(bpp, dst, 0, cc); \
+			} \
+			else if (a1 > 0) { \
+				cc = _ipixel_fetch(bpp, dst, 0); \
+				IRGBA_FROM_PIXEL(fmt, cc, r2, g2, b2, a2); \
+				IBLEND_SRCOVER(r1, g1, b1, a1, r2, g2, b2, a2); \
+				cc = IRGBA_TO_PIXEL(fmt, r2, g2, b2, a2); \
+				_ipixel_store(bpp, dst, 0, cc); \
+			} \
+			card++; \
+			dst += nbytes; \
+		} \
+	}	else { \
+		for (inc = w; inc > 0; inc--) { \
+			_ipixel_load_card(card, r1, g1, b1, a1); \
+			cc = *cover++; \
+			r2 = a1 + cc; \
+			if (r2 == 510) { \
+				cc = IRGBA_TO_PIXEL(fmt, r1, g1, b1, 255); \
+				_ipixel_store(bpp, dst, 0, cc); \
+			} \
+			else if (r2 > 0 && cc > 0) { \
+				a1 = _imul_y_div_255(a1, cc); \
+				cc = _ipixel_fetch(bpp, dst, 0); \
+				IRGBA_FROM_PIXEL(fmt, cc, r2, g2, b2, a2); \
+				r1 = _imul_y_div_255(r1, cc); \
+				g1 = _imul_y_div_255(g1, cc); \
+				b1 = _imul_y_div_255(b1, cc); \
+				IBLEND_SRCOVER(r1, g1, b1, a1, r2, g2, b2, a2); \
+				cc = IRGBA_TO_PIXEL(fmt, r2, g2, b2, a2); \
+				_ipixel_store(bpp, dst, 0, cc); \
+			} \
+			card++; \
+			dst += nbytes; \
+		} \
+	} \
+	cc = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2; \
+} \
+static void ipixel_span_draw_proc_##fmt##_2(void *bits, \
 	int offset, int w, const IUINT32 *card, const IUINT8 *cover, \
 	const iColorIndex *_ipixel_src_index) \
 { \
@@ -1615,6 +1692,7 @@ static void ipixel_span_draw_proc_##fmt##_1(void *bits, \
 			dst += nbytes; \
 		} \
 	} \
+	cc = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2; \
 }
 
 /* span blending for 8 bits without palette */
@@ -1665,8 +1743,60 @@ static void ipixel_span_draw_proc_##fmt##_0(void *bits, \
 			dst++; \
 		} \
 	} \
+	cc = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2; \
 } \
 static void ipixel_span_draw_proc_##fmt##_1(void *bits, \
+	int offset, int w, const IUINT32 *card, const IUINT8 *cover, \
+	const iColorIndex *_ipixel_src_index) \
+{ \
+	unsigned char *dst = ((unsigned char*)bits) + (offset); \
+	IUINT32 cc, r1, g1, b1, a1, r2, g2, b2, a2, inc; \
+	if (cover == NULL) { \
+		for (inc = w; inc > 0; inc--) { \
+			_ipixel_load_card(card, r1, g1, b1, a1); \
+			if (a1 == 255) { \
+				cc = IRGBA_TO_PIXEL(fmt, r1, g1, b1, 255); \
+				_ipixel_store(bpp, dst, 0, cc); \
+			} \
+			else if (a1 > 0) { \
+				r1 = dst[0]; \
+				cc = _ipixel_cvt_lut_##fmt[r1]; \
+				IRGBA_FROM_PIXEL(A8R8G8B8, cc, r2, g2, b2, a2); \
+				IBLEND_SRCOVER(r1, g1, b1, a1, r2, g2, b2, a2); \
+				cc = IRGBA_TO_PIXEL(fmt, r2, g2, b2, a2); \
+				_ipixel_store(bpp, dst, 0, cc); \
+			} \
+			card++; \
+			dst++; \
+		} \
+	}	else { \
+		for (inc = w; inc > 0; inc--) { \
+			_ipixel_load_card(card, r1, g1, b1, a1); \
+			cc = *cover++; \
+			r2 = a1 + cc; \
+			if (r2 == 510) { \
+				cc = IRGBA_TO_PIXEL(fmt, r1, g1, b1, 255); \
+				_ipixel_store(bpp, dst, 0, cc); \
+			} \
+			else if (r2 > 0 && cc > 0) { \
+				a1 = _imul_y_div_255(a1, cc); \
+				r1 = dst[0]; \
+				cc = _ipixel_cvt_lut_##fmt[r1]; \
+				IRGBA_FROM_PIXEL(A8R8G8B8, cc, r2, g2, b2, a2); \
+				r1 = _imul_y_div_255(r1, cc); \
+				g1 = _imul_y_div_255(g1, cc); \
+				b1 = _imul_y_div_255(b1, cc); \
+				IBLEND_SRCOVER(r1, g1, b1, a1, r2, g2, b2, a2); \
+				cc = IRGBA_TO_PIXEL(fmt, r2, g2, b2, a2); \
+				_ipixel_store(bpp, dst, 0, cc); \
+			} \
+			card++; \
+			dst++; \
+		} \
+	} \
+	cc = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2; \
+} \
+static void ipixel_span_draw_proc_##fmt##_2(void *bits, \
 	int offset, int w, const IUINT32 *card, const IUINT8 *cover, \
 	const iColorIndex *_ipixel_src_index) \
 { \
@@ -1703,6 +1833,7 @@ static void ipixel_span_draw_proc_##fmt##_1(void *bits, \
 			dst++; \
 		} \
 	} \
+	cc = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2; \
 }
 
 /* span blending for 8/4/1 bits with or without palette */
@@ -1750,8 +1881,57 @@ static void ipixel_span_draw_proc_##fmt##_0(void *bits, \
 			card++; \
 		} \
 	} \
+	cc = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2; \
 } \
 static void ipixel_span_draw_proc_##fmt##_1(void *bits, \
+	int offset, int w, const IUINT32 *card, const IUINT8 *cover, \
+	const iColorIndex *_ipixel_src_index) \
+{ \
+	IUINT32 cc, r1, g1, b1, a1, r2, g2, b2, a2, inc; \
+	unsigned char *dst = (unsigned char*)bits; \
+	init; \
+	if (cover == NULL) { \
+		for (inc = offset; w > 0; inc++, w--) { \
+			_ipixel_load_card(card, r1, g1, b1, a1); \
+			if (a1 == 255) { \
+				cc = IRGBA_TO_PIXEL(fmt, r1, g1, b1, 255); \
+				_ipixel_store(bpp, dst, inc, cc); \
+			} \
+			else if (a1 > 0) { \
+				cc = _ipixel_fetch(bpp, dst, inc); \
+				IRGBA_FROM_PIXEL(fmt, cc, r2, g2, b2, a2); \
+				IBLEND_SRCOVER(r1, g1, b1, a1, r2, g2, b2, a2); \
+				cc = IRGBA_TO_PIXEL(fmt, r2, g2, b2, a2); \
+				_ipixel_store(bpp, dst, inc, cc); \
+			} \
+			card++; \
+		} \
+	}	else { \
+		for (inc = offset; w > 0; inc++, w--) { \
+			_ipixel_load_card(card, r1, g1, b1, a1); \
+			cc = *cover++; \
+			r2 = a1 + cc; \
+			if (r2 == 510) { \
+				cc = IRGBA_TO_PIXEL(fmt, r1, g1, b1, 255); \
+				_ipixel_store(bpp, dst, inc, cc); \
+			} \
+			else if (r2 > 0 && cc > 0) { \
+				a1 = _imul_y_div_255(a1, cc); \
+				cc = _ipixel_fetch(bpp, dst, inc); \
+				IRGBA_FROM_PIXEL(fmt, cc, r2, g2, b2, a2); \
+				r1 = _imul_y_div_255(r1, cc); \
+				g1 = _imul_y_div_255(g1, cc); \
+				b1 = _imul_y_div_255(b1, cc); \
+				IBLEND_SRCOVER(r1, g1, b1, a1, r2, g2, b2, a2); \
+				cc = IRGBA_TO_PIXEL(fmt, r2, g2, b2, a2); \
+				_ipixel_store(bpp, dst, inc, cc); \
+			} \
+			card++; \
+		} \
+	} \
+	cc = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2; \
+} \
+static void ipixel_span_draw_proc_##fmt##_2(void *bits, \
 	int offset, int w, const IUINT32 *card, const IUINT8 *cover, \
 	const iColorIndex *_ipixel_src_index) \
 { \
@@ -1915,12 +2095,14 @@ static void ipixel_span_draw_proc_over_32(void *bits,
 
 struct iPixelSpanDrawProc
 {
-	iSpanDrawProc blend, additive, blend_default, additive_default;
+	iSpanDrawProc blend, srcover, additive;
+	iSpanDrawProc blend_builtin, srcover_builtin, additive_builtin;
 };
 
 #define ITABLE_ITEM(fmt) { \
 	ipixel_span_draw_proc_##fmt##_0, ipixel_span_draw_proc_##fmt##_1, \
-	ipixel_span_draw_proc_##fmt##_0, ipixel_span_draw_proc_##fmt##_1 }
+	ipixel_span_draw_proc_##fmt##_2, ipixel_span_draw_proc_##fmt##_0, \
+	ipixel_span_draw_proc_##fmt##_1, ipixel_span_draw_proc_##fmt##_2 }
 
 static struct iPixelSpanDrawProc ipixel_span_proc_list[IPIX_FMT_COUNT] =
 {
@@ -1994,7 +2176,7 @@ static struct iPixelSpanDrawProc ipixel_span_proc_list[IPIX_FMT_COUNT] =
 
 static iSpanDrawProc ipixel_span_draw_over = ipixel_span_draw_proc_over_32;
 
-iSpanDrawProc ipixel_get_span_proc(int fmt, int isadditive, int usedefault)
+iSpanDrawProc ipixel_get_span_proc(int fmt, int op, int builtin)
 {
 	assert(fmt >= 0 && fmt < IPIX_FMT_COUNT);
 	if (fmt < -1 || fmt >= IPIX_FMT_COUNT) {
@@ -2002,18 +2184,20 @@ iSpanDrawProc ipixel_get_span_proc(int fmt, int isadditive, int usedefault)
 		return NULL;
 	}
 	if (ipixel_lut_inited == 0) ipixel_lut_init();
-	if (usedefault) {
+	if (builtin) {
 		if (fmt < 0) return ipixel_span_draw_proc_over_32;
-		if (isadditive == 0) return ipixel_span_proc_list[fmt].blend_default;
-		else return ipixel_span_proc_list[fmt].additive_default;
+		if (op == 0) return ipixel_span_proc_list[fmt].blend_builtin;
+		else if (op == 1) return ipixel_span_proc_list[fmt].srcover_builtin;
+		else return ipixel_span_proc_list[fmt].additive_builtin;
 	}	else {
 		if (fmt < 0) return ipixel_span_draw_over;
-		if (isadditive == 0) return ipixel_span_proc_list[fmt].blend;
+		if (op == 0) return ipixel_span_proc_list[fmt].blend;
+		else if (op == 1) return ipixel_span_proc_list[fmt].srcover;
 		else return ipixel_span_proc_list[fmt].additive;
 	}
 }
 
-void ipixel_set_span_proc(int fmt, int isadditive, iSpanDrawProc proc)
+void ipixel_set_span_proc(int fmt, int op, iSpanDrawProc proc)
 {
 	assert(fmt >= 0 && fmt < IPIX_FMT_COUNT);
 	if (fmt < -1 || fmt >= IPIX_FMT_COUNT) {
@@ -2027,20 +2211,30 @@ void ipixel_set_span_proc(int fmt, int isadditive, iSpanDrawProc proc)
 		}	else {
 			ipixel_span_draw_over = ipixel_span_draw_proc_over_32;
 		}
-	}	else {
-		if (isadditive == 0) {
+	}	
+	else {
+		if (op == 0) {
 			if (proc != NULL) {
 				ipixel_span_proc_list[fmt].blend = proc;
 			}	else {
 				ipixel_span_proc_list[fmt].blend = 
-					ipixel_span_proc_list[fmt].blend_default;
+					ipixel_span_proc_list[fmt].blend_builtin;
 			}
-		}	else {
+		}	
+		else if (op == 1) {
+			if (proc != NULL) {
+				ipixel_span_proc_list[fmt].srcover = proc;
+			}	else {
+				ipixel_span_proc_list[fmt].srcover = 
+					ipixel_span_proc_list[fmt].srcover_builtin;
+			}
+		}
+		else {
 			if (proc != NULL) {
 				ipixel_span_proc_list[fmt].additive = proc;
 			}	else {
 				ipixel_span_proc_list[fmt].additive =
-					ipixel_span_proc_list[fmt].additive_default;
+					ipixel_span_proc_list[fmt].additive_builtin;
 			}
 		}
 	}
@@ -2168,7 +2362,8 @@ void ipixel_card_cover_default(IUINT32 *card, int size, const IUINT8 *cover)
 			aa = ((IUINT8*)card)[_ipixel_card_alpha];
 			if (aa == 0) continue;
 			aa *= cc;
-			((IUINT8*)card)[_ipixel_card_alpha] = (IUINT8)_idiv_255(aa);
+			((IUINT8*)card)[_ipixel_card_alpha] = 
+				(IUINT8)_ipixel_fast_div_255(aa);
 		}
 	}
 }
@@ -2300,8 +2495,71 @@ static void ipixel_hline_draw_proc_##fmt##_0(void *bits, \
 			} \
 		} \
 	} \
+	cc = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2; \
 } \
 static void ipixel_hline_draw_proc_##fmt##_1(void *bits, \
+	int offset, int w, IUINT32 color, const IUINT8 *cover, \
+	const iColorIndex *idx) \
+{ \
+	unsigned char *dst = ((unsigned char*)bits) + offset * nbytes; \
+	IUINT32 r1, g1, b1, a1, r2, g2, b2, a2, cc, cx, cz; \
+	IUINT32 r3, g3, b3; \
+	IRGBA_FROM_A8R8G8B8(color, r1, g1, b1, a1); \
+	if (a1 == 0) return; \
+	cz = IRGBA_TO_PIXEL(fmt, r1, g1, b1, a1); \
+	if (cover == NULL) { \
+		if (a1 == 255) { \
+			_ipixel_fill(bpp, dst, 0, w, cz); \
+		} \
+		else if (a1 > 0) { \
+			for (; w > 0; dst += nbytes, w--) { \
+				cc = _ipixel_fetch(bpp, dst, 0); \
+				IRGBA_FROM_PIXEL(fmt, cc, r2, g2, b2, a2); \
+				IBLEND_SRCOVER(r1, g1, b1, a1, r2, g2, b2, a2); \
+				cc = IRGBA_TO_PIXEL(fmt, r2, g2, b2, a2); \
+				_ipixel_store(bpp, dst, 0, cc); \
+			} \
+		} \
+	}	else { \
+		if (a1 == 255) { \
+			for (; w > 0; dst += nbytes, w--) { \
+				a1 = *cover++; \
+				if (a1 == 255) { \
+					_ipixel_store(bpp, dst, 0, cz); \
+				} \
+				else if (a1 > 0) { \
+					cc = _ipixel_fetch(bpp, dst, 0); \
+					IRGBA_FROM_PIXEL(fmt, cc, r2, g2, b2, a2); \
+					r3 = _imul_y_div_255(r1, a1); \
+					g3 = _imul_y_div_255(g1, a1); \
+					b3 = _imul_y_div_255(b1, a1); \
+					IBLEND_SRCOVER(r3, g3, b3, a1, r2, g2, b2, a2); \
+					cc = IRGBA_TO_PIXEL(fmt, r2, g2, b2, a2); \
+					_ipixel_store(bpp, dst, 0, cc); \
+				} \
+			} \
+		}	\
+		else if (a1 > 0) { \
+			a1 = _ipixel_norm(a1); \
+			for (; w > 0; dst += nbytes, w--) { \
+				cx = *cover++; \
+				if (cx > 0) { \
+					r3 = _imul_y_div_255(r1, cx); \
+					g3 = _imul_y_div_255(g1, cx); \
+					b3 = _imul_y_div_255(b1, cx); \
+					cx = (cx * a1) >> 8; \
+					cc = _ipixel_fetch(bpp, dst, 0); \
+					IRGBA_FROM_PIXEL(fmt, cc, r2, g2, b2, a2); \
+					IBLEND_SRCOVER(r3, g3, b3, cx, r2, g2, b2, a2); \
+					cc = IRGBA_TO_PIXEL(fmt, r2, g2, b2, a2); \
+					_ipixel_store(bpp, dst, 0, cc); \
+				} \
+			} \
+		} \
+	} \
+	cc = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2; \
+} \
+static void ipixel_hline_draw_proc_##fmt##_2(void *bits, \
 	int offset, int w, IUINT32 color, const IUINT8 *cover, \
 	const iColorIndex *idx) \
 { \
@@ -2412,8 +2670,76 @@ static void ipixel_hline_draw_proc_##fmt##_0(void *bits, \
 			} \
 		} \
 	} \
+	cc = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2; \
 } \
 static void ipixel_hline_draw_proc_##fmt##_1(void *bits, \
+	int offset, int w, IUINT32 col, const IUINT8 *cover, \
+	const iColorIndex *_ipixel_src_index) \
+{ \
+	unsigned char *dst = ((unsigned char*)bits); \
+	IUINT32 r1, g1, b1, a1, r2, g2, b2, a2, cc, cx, cz; \
+	IUINT32 r3, g3, b3; \
+	init; \
+	IRGBA_FROM_A8R8G8B8(col, r1, g1, b1, a1); \
+	if (a1 == 0) return; \
+	cz = IRGBA_TO_PIXEL(fmt, r1, g1, b1, a1); \
+	if (cover == NULL) { \
+		if (a1 == 255) { \
+			_ipixel_fill(bpp, dst, offset, w, cz); \
+		} \
+		else if (a1 > 0) { \
+			for (; w > 0; offset++, w--) { \
+				cc = _ipixel_fetch(bpp, dst, offset); \
+				IRGBA_FROM_PIXEL(fmt, cc, r2, g2, b2, a2); \
+				IBLEND_SRCOVER(r1, g1, b1, a1, r2, g2, b2, a2); \
+				cc = IRGBA_TO_PIXEL(fmt, r2, g2, b2, a2); \
+				_ipixel_store(bpp, dst, offset, cc); \
+			} \
+		} \
+	}	else { \
+		if (a1 == 255) { \
+			for (; w > 0; offset++, w--) { \
+				a1 = *cover++; \
+				if (a1 == 255) { \
+					_ipixel_store(bpp, dst, offset, cz); \
+				} \
+				else if (a1 > 0) { \
+					cc = _ipixel_fetch(bpp, dst, offset); \
+					IRGBA_FROM_PIXEL(fmt, cc, r2, g2, b2, a2); \
+					r3 = _imul_y_div_255(r1, a1); \
+					g3 = _imul_y_div_255(g1, a1); \
+					b3 = _imul_y_div_255(b1, a1); \
+					IBLEND_SRCOVER(r3, g3, b3, a1, r2, g2, b2, a2); \
+					cc = IRGBA_TO_PIXEL(fmt, r2, g2, b2, a2); \
+					_ipixel_store(bpp, dst, offset, cc); \
+				} \
+			} \
+		}	\
+		else if (a1 > 0) { \
+			a1 = _ipixel_norm(a1); \
+			for (; w > 0; offset++, w--) { \
+				cx = *cover++; \
+				if (cx + a1 == 255 + 256) { \
+					cc = IRGBA_TO_PIXEL(fmt, r1, g1, b1, 255); \
+					_ipixel_store(bpp, dst, offset, cc); \
+				} \
+				else if (cx > 0) { \
+					r3 = _imul_y_div_255(r1, cx); \
+					g3 = _imul_y_div_255(g1, cx); \
+					b3 = _imul_y_div_255(b1, cx); \
+					cx = (cx * a1) >> 8; \
+					cc = _ipixel_fetch(bpp, dst, offset); \
+					IRGBA_FROM_PIXEL(fmt, cc, r2, g2, b2, a2); \
+					IBLEND_SRCOVER(r1, g1, b1, cx, r2, g2, b2, a2); \
+					cc = IRGBA_TO_PIXEL(fmt, r1, g1, b1, 255); \
+					_ipixel_store(bpp, dst, offset, cc); \
+				} \
+			} \
+		} \
+	} \
+	cc = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2; \
+} \
+static void ipixel_hline_draw_proc_##fmt##_2(void *bits, \
 	int offset, int w, IUINT32 col, const IUINT8 *cover, \
 	const iColorIndex *_ipixel_src_index) \
 { \
@@ -2464,6 +2790,7 @@ static void ipixel_hline_draw_proc_##fmt##_1(void *bits, \
 			} \
 		} \
 	} \
+	cc = a1 + a2 + r1 + r2 + g1 + g2 + b1 + b2; \
 }
 
 /* hline filling: 8/4/1 bits without palette */
@@ -2556,12 +2883,14 @@ IPIXEL_HLINE_DRAW_MAIN(BITS, A1, 1, 1, NORMAL_FAST)
 
 struct iPixelHLineDrawProc
 {
-	iHLineDrawProc blend, additive, blend_default, additive_default;
+	iHLineDrawProc blend, srcover, additive;
+	iHLineDrawProc blend_builtin, srcover_builtin, additive_builtin;
 };
 
 #define ITABLE_ITEM(fmt) { \
 	ipixel_hline_draw_proc_##fmt##_0, ipixel_hline_draw_proc_##fmt##_1, \
-	ipixel_hline_draw_proc_##fmt##_0, ipixel_hline_draw_proc_##fmt##_1 }
+	ipixel_hline_draw_proc_##fmt##_2, ipixel_hline_draw_proc_##fmt##_0, \
+	ipixel_hline_draw_proc_##fmt##_1, ipixel_hline_draw_proc_##fmt##_2 }
 
 static struct iPixelHLineDrawProc ipixel_hline_proc_list[IPIX_FMT_COUNT] =
 {
@@ -2635,7 +2964,7 @@ static struct iPixelHLineDrawProc ipixel_hline_proc_list[IPIX_FMT_COUNT] =
 
 
 /* get a hline drawing function with given pixel format */
-iHLineDrawProc ipixel_get_hline_proc(int fmt, int isadditive, int usedefault)
+iHLineDrawProc ipixel_get_hline_proc(int fmt, int op, int builtin)
 {
 	assert(fmt >= 0 && fmt < IPIX_FMT_COUNT);
 	if (fmt < 0 || fmt >= IPIX_FMT_COUNT) {
@@ -2643,21 +2972,25 @@ iHLineDrawProc ipixel_get_hline_proc(int fmt, int isadditive, int usedefault)
 		return NULL;
 	}
 	if (ipixel_lut_inited == 0) ipixel_lut_init();
-	if (usedefault) {
-		if (isadditive == 0) 
-			return ipixel_hline_proc_list[fmt].blend_default;
-		else 
-			return ipixel_hline_proc_list[fmt].additive_default;
+	if (builtin) {
+		if (op == 0) 
+			return ipixel_hline_proc_list[fmt].blend_builtin;
+		else if (op == 1)
+			return ipixel_hline_proc_list[fmt].srcover_builtin;
+		else
+			return ipixel_hline_proc_list[fmt].additive_builtin;
 	}	else {
-		if (isadditive == 0) 
+		if (op == 0) 
 			return ipixel_hline_proc_list[fmt].blend;
+		else if (op == 1)
+			return ipixel_hline_proc_list[fmt].srcover;
 		else 
 			return ipixel_hline_proc_list[fmt].additive;
 	}
 }
 
 /* set a hline drawing function */
-void ipixel_set_hline_proc(int fmt, int isadditive, iHLineDrawProc proc)
+void ipixel_set_hline_proc(int fmt, int op, iHLineDrawProc proc)
 {
 	assert(fmt >= 0 && fmt < IPIX_FMT_COUNT);
 	if (fmt < 0 || fmt >= IPIX_FMT_COUNT) {
@@ -2665,19 +2998,28 @@ void ipixel_set_hline_proc(int fmt, int isadditive, iHLineDrawProc proc)
 		return;
 	}
 	if (ipixel_lut_inited == 0) ipixel_lut_init();
-	if (isadditive == 0) {
+	if (op == 0) {
 		if (proc != NULL) {
 			ipixel_hline_proc_list[fmt].blend = proc;
 		}	else {
 			ipixel_hline_proc_list[fmt].blend = 
-				ipixel_hline_proc_list[fmt].blend_default;
+				ipixel_hline_proc_list[fmt].blend_builtin;
 		}
-	}	else {
+	}	
+	else if (op == 1) {
+		if (proc != NULL) {
+			ipixel_hline_proc_list[fmt].srcover = proc;
+		}	else {
+			ipixel_hline_proc_list[fmt].srcover = 
+				ipixel_hline_proc_list[fmt].srcover_builtin;
+		}
+	}
+	else {
 		if (proc != NULL) {
 			ipixel_hline_proc_list[fmt].additive = proc;
 		}	else {
 			ipixel_hline_proc_list[fmt].additive = 
-				ipixel_hline_proc_list[fmt].additive_default;
+				ipixel_hline_proc_list[fmt].additive_builtin;
 		}
 	}
 }
@@ -2728,8 +3070,11 @@ long ipixel_blend(int dfmt, void *dbits, long dpitch, int dx, int sfmt,
 	if (op == IPIXEL_BLEND_OP_BLEND) {
 		drawspan = ipixel_get_span_proc(dfmt, 0, 0);
 	}
-	else if (op == IPIXEL_BLEND_OP_ADD) {
+	else if (op == IPIXEL_BLEND_OP_SRCOVER) {
 		drawspan = ipixel_get_span_proc(dfmt, 1, 0);
+	}
+	else if (op == IPIXEL_BLEND_OP_ADD) {
+		drawspan = ipixel_get_span_proc(dfmt, 2, 0);
 	}
 
 	if ((flip & IPIXEL_FLIP_VFLIP) != 0) {
@@ -2850,7 +3195,7 @@ static int ipixel_blit_proc_##nbits(void *dbits, long dpitch, int dx,  \
 	if ((flip & IPIXEL_FLIP_HFLIP) == 0) { \
 		long size = w * nbytes; \
 		for (y = 0; y < h; y++) { \
-			memcpy((INTTYPE*)dbits + dx, (const INTTYPE*)sbits + sx, size); \
+			ipixel_memcpy((INTTYPE*)dbits + dx, (const INTTYPE*)sbits + sx, size); \
 			dbits = (IUINT8*)dbits + dpitch; \
 			sbits = (const IUINT8*)sbits + spitch; \
 		} \
@@ -3430,7 +3775,7 @@ static int ipixel_composite_inited = 0;
 
 static void ipixel_comp_src(IUINT32 *dst, const IUINT32 *src, int w)
 {
-	memcpy(dst, src, w * sizeof(IUINT32));
+	ipixel_memcpy(dst, src, w * sizeof(IUINT32));
 }
 
 static void ipixel_comp_dst(IUINT32 *dst, const IUINT32 *src, int w)
@@ -3602,12 +3947,13 @@ static void ipixel_comp_tint(IUINT32 *dst, const IUINT32 *src, int w)
 			r1 = r1 * r2;
 			g1 = g1 * g2;
 			b1 = b1 * b2;
-			r1 = _idiv_255(r1);
-			g1 = _idiv_255(g1);
-			b1 = _idiv_255(b1);
+			r1 = _ipixel_fast_div_255(r1);
+			g1 = _ipixel_fast_div_255(g1);
+			b1 = _ipixel_fast_div_255(b1);
 			dst[0] = IRGBA_TO_A8R8G8B8(r1, g1, b1, a2);
 		}
 	}
+	r1 = a2 + a1;
 }
 
 static void ipixel_comp_diff(IUINT32 *dst, const IUINT32 *src, int w)
