@@ -2,6 +2,9 @@
  *
  * ibmbits.c - bitmap bits accessing
  *
+ * Maintainer: skywind3000 (at) gmail.com, 2009, 2010, 2011, 2013
+ * Homepage: https://github.com/skywind3000/pixellib
+ *
  * FEATURES:
  *
  * - up to 64 pixel-formats supported
@@ -9,11 +12,34 @@
  * - storing card(A8R8G8B8) to any pixel-formats
  * - drawing scanline (copy/blend/additive) to any pixel-formats
  * - blit (with/without color key) between bitmaps
- * - converting between any formats to another
- * - compositing with 35 operators
+ * - converting between any format to another one
+ * - compositing scanline with 35 operators
  * - many useful macros to access/process pixels
  * - all the routines can be replaced by calling **_set_**
  * - using 203KB static memory for look-up-tables
+ * - self contained, C89 compatible
+ *
+ * INTERFACES:
+ *
+ * - ipixel_get_fetch: get function to fetch pixels into A8R8G8B8 format.
+ * - ipixel_get_store: get function to store pixels from A8R8G8B8 format.
+ * - ipixel_get_span_proc: get function to draw scanline with cover.
+ * - ipixel_get_hline_proc: get function to draw horizontal line with cover.
+ * - ipixel_blit: blit between two bitmaps with same color depth.
+ * - ipixel_blend: blend between two bitmaps with different pixel-format.
+ * - ipixel_convert: convert pixel-format.
+ * - ipixel_fmt_init: initialize customized pixel-format with rgb masks.
+ * - ipixel_fmt_cvt: convert between customized pixel-formats.
+ * - ipixel_composite_get: get scanline compositor with 35 operators.
+ * - ipixel_clip: valid rectangle clip.
+ * - ipixel_set_dots: batch draw dots from the position array to a bitmap.
+ * - ipixel_palette_fit: fint best fit color in the palette.
+ * - ipixel_palette_fetch: fetch from color index buffer to A8R8G8B8.
+ * - ipixel_palette_store: store from A8R8G8B8 to color index buffer.
+ * - ipixel_card_reverse: reverse A8R8G8B8 scanline.
+ * - ipixel_card_shuffle: color components shuffle.
+ * - ipixel_card_multi: A8R8G8B8 scanline color multiplication.
+ * - ipixel_card_cover: A8R8G8B8 scanline coverage.
  *
  * HISTORY:
  *
@@ -25,6 +51,7 @@
  * 2010.10.25  skywind  implement bliting and converting and cliping
  * 2011.03.04  skywind  implement card operations
  * 2011.08.10  skywind  implement compositing
+ * 2013.09.11  skywind  free format converting
  *
  **********************************************************************/
 
@@ -279,6 +306,8 @@ unsigned char ipixel_blend_lut[2048 * 2];
 unsigned char _ipixel_mullut[256][256];   /* [x][y] = x * y / 255 */
 unsigned char _ipixel_divlut[256][256];   /* [x][y] = y * 255 / x */
 
+unsigned char _ipixel_fmt_scale[9][256];   /* component scale for 0-8 bits */
+
 /* memcpy hook */
 void *(*ipixel_memcpy_hook)(void *dst, const void *src, size_t size) = NULL;
 
@@ -293,7 +322,7 @@ void *(*ipixel_memcpy_hook)(void *dst, const void *src, size_t size) = NULL;
  **********************************************************************/
 
 /* find best fit color */
-int ibestfit_color(const IRGB *pal, int r, int g, int b, int palsize)
+int ipixel_palette_fit(const IRGB *pal, int r, int g, int b, int palsize)
 { 
 	static IUINT32 diff_lookup[512 * 3] = { 0 };
 	long lowest = 0x7FFFFFFF, bestfit = 0;
@@ -359,7 +388,7 @@ int ipalette_to_index(iColorIndex *index, const IRGB *pal, int palsize)
 	}
 	for (i = 0; i < 0x8000; i++) {
 		IRGBA_FROM_PIXEL(X1R5G5B5, i, r, g, b, a);
-		index->ent[i] = ibestfit_color(pal, r, g, b, palsize);
+		index->ent[i] = ipixel_palette_fit(pal, r, g, b, palsize);
 	}
 	return 0;
 }
@@ -405,7 +434,7 @@ void *ipixel_memcpy(void *dst, const void *src, size_t size)
 		ss += 8;
 	}
 	for (; size > 0; size--) *dd++ = *ss++;
-	return dst;		
+	return dst;
 #endif
 }
 
@@ -2402,6 +2431,30 @@ void ipixel_card_over(IUINT32 *dst, int size, const IUINT32 *card,
 	ipixel_card_over_proc(dst, size, card, cover);
 }
 
+/* default card shuffle */
+static void ipixel_card_shuffle_default(IUINT32 *card, int w, 
+	int b0, int b1, int b2, int b3)
+{
+	IUINT8 *src = (IUINT8*)card;
+	union { IUINT8 quad[4]; IUINT32 color; } cc;
+	for (; w > 0; src += 4, w--) {
+		cc.color = *((IUINT32*)src);
+		src[0] = cc.quad[b0];
+		src[1] = cc.quad[b1];
+		src[2] = cc.quad[b2];
+		src[3] = cc.quad[b3];
+	}
+}
+
+static void (*ipixel_card_shuffle_proc)(IUINT32*, int, int, int, int, int) = 
+	ipixel_card_shuffle_default;
+
+void ipixel_card_shuffle(IUINT32 *card, int w, int a, int b, int c, int d)
+{
+	ipixel_card_shuffle_proc(card, w, a, b, c, d);
+}
+
+
 /* card proc set */
 void ipixel_card_set_proc(int id, void *proc)
 {
@@ -2432,6 +2485,13 @@ void ipixel_card_set_proc(int id, void *proc)
 			ipixel_card_over_proc = 
 				(void (*)(IUINT32*, int, const IUINT32*, const IUINT8*))proc;
 		}
+	}
+	else if (id == 4) {
+		if (proc == NULL) 
+			ipixel_card_shuffle_proc = ipixel_card_shuffle_default;
+		else
+			ipixel_card_shuffle_proc = 
+				(void (*)(IUINT32*, int, int, int, int, int))proc;
 	}
 }
 
@@ -3638,7 +3698,454 @@ long ipixel_convert(int dfmt, void *dbits, long dpitch, int dx, int sfmt,
 
 
 /**********************************************************************
- * CLIPING
+ * FREE FORMAT CONVERT
+ **********************************************************************/
+
+static iPixelFmtReader ipixel_fmt_reader[4] = { NULL, NULL, NULL, NULL };
+static iPixelFmtWriter ipixel_fmt_writer[4] = { NULL, NULL, NULL, NULL };
+
+/* default free format reader */
+static int ipixel_fmt_reader_default(const iPixelFmt *fmt, 
+	const void *bits, int x, int w, IUINT32 *card);
+
+/* default free format writer */
+static int ipixel_fmt_writer_default(const iPixelFmt *fmt,
+	void *bits, int x, int w, const IUINT32 *card);
+
+
+/* initialize _ipixel_fmt_scale */
+static void ipixel_fmt_make_lut(void) 
+{
+	static int inited = 0;
+	if (inited == 0) {
+		int i;
+		for (i = 0; i < 9; i++) {
+			IUINT8 *table = _ipixel_fmt_scale[i];
+			IUINT32 maxvalue = (1 << i) - 1;
+			int k = 0;
+			memset(table, 255, 256);
+			if (maxvalue > 0) {
+				for (k = 0; k <= maxvalue; k++) {
+					table[k] = k * 255 / maxvalue;
+				}
+			}
+		}
+		inited = 1;
+	}
+}
+
+
+/* ipixel_fmt_init: init pixel format structure
+ * depth: color bits, one of 8, 16, 24, 32
+ * rmask: mask for red, eg:   0x00ff0000
+ * gmask: mask for green, eg: 0x0000ff00
+ * bmask: mask for blue, eg:  0x000000ff
+ * amask: mask for alpha, eg: 0xff000000
+ */
+int ipixel_fmt_init(iPixelFmt *fmt, int depth, 
+	IUINT32 rmask, IUINT32 gmask, IUINT32 bmask, IUINT32 amask)
+{
+	int pixelbyte = (depth + 7) / 8;
+	int i;
+	fmt->bpp = pixelbyte * 8;
+	if (depth < 8 || depth > 32) {
+		return -1;
+	}
+	ipixel_fmt_make_lut();
+	for (i = 0; i < IPIX_FMT_COUNT; i++) {
+		if (ipixelfmt[i].amask == amask &&
+			ipixelfmt[i].rmask == rmask &&
+			ipixelfmt[i].gmask == gmask &&
+			ipixelfmt[i].bmask == bmask) {
+			if (fmt->bpp == ipixelfmt[i].bpp) {
+				fmt[0] = ipixelfmt[i];
+				return 0;
+			}
+		}
+	}
+	fmt->format = IPIX_FMT_UNKNOWN;
+	fmt->bpp = pixelbyte * 8;
+	fmt->rmask = rmask;
+	fmt->gmask = gmask;
+	fmt->bmask = bmask;
+	fmt->amask = amask;
+	fmt->alpha = (amask == 0)? 0 : 1;
+	fmt->type = (fmt->alpha)? IPIX_FMT_TYPE_ARGB : IPIX_FMT_TYPE_RGB;
+	fmt->pixelbyte = pixelbyte;
+	fmt->name = "IPIX_FMT_UNKNOWN";
+	for (i = 0; i < 4; i++) {
+		IUINT32 mask;
+		int shift = 0;
+		int loss = 8;
+		switch (i) {
+		case 0: mask = fmt->rmask; break;
+		case 1: mask = fmt->gmask; break;
+		case 2: mask = fmt->bmask; break;
+		case 3: mask = fmt->amask; break;
+		}
+		if (mask != 0) {
+			int zeros = 0;
+			int ones = 0;
+			for (zeros = 0; (mask & 1) == 0; zeros++, mask >>= 1);
+			for (ones = 0; (mask & 1) == 1; ones++, mask >>= 1);
+			shift = zeros;
+			if (ones <= 8) {
+				loss = 8 - ones;
+			}	else {
+				return -2;
+			}
+		}
+		switch (i) {
+		case 0: fmt->rloss = loss; fmt->rshift = shift; break;
+		case 1: fmt->gloss = loss; fmt->gshift = shift; break;
+		case 2: fmt->bloss = loss; fmt->bshift = shift; break;
+		case 3: fmt->aloss = loss; fmt->ashift = shift; break;
+		}
+	}
+	return 0;
+}
+
+
+/* set free format reader */
+void ipixel_fmt_set_reader(int depth, iPixelFmtReader reader)
+{
+	int index = ((depth + 7) / 8) - 1;
+	if (index >= 0 && index < 4) {
+		ipixel_fmt_make_lut();
+		ipixel_fmt_reader[index] = reader;
+	}
+}
+
+
+/* set free format writer */
+void ipixel_fmt_set_writer(int depth, iPixelFmtWriter writer)
+{
+	int index = ((depth + 7) / 8) - 1;
+	if (index >= 0 && index < 4) {
+		ipixel_fmt_writer[index] = writer;
+	}
+}
+
+
+/* get free format reader */
+iPixelFmtReader ipixel_fmt_get_reader(int depth, int isdefault)
+{
+	int index = ((depth + 7) / 8) - 1;
+	int inited = 0;
+	if (inited == 0) {
+		ipixel_fmt_make_lut();
+		inited = 1;
+	}
+	if (index < 0 || index >= 4) return NULL;
+	if (ipixel_fmt_reader[index] == NULL || isdefault != 0) {
+		return ipixel_fmt_reader_default;
+	}
+	return ipixel_fmt_reader[index];
+}
+
+
+/* get free format writer */
+iPixelFmtWriter ipixel_fmt_get_writer(int depth, int isdefault)
+{
+	int index = ((depth + 7) / 8) - 1;
+	if (index < 0 || index >= 4) return NULL;
+	if (ipixel_fmt_writer[index] == NULL || isdefault != 0) {
+		return ipixel_fmt_writer_default;
+	}
+	return ipixel_fmt_writer[index];
+}
+
+
+/* free format defaut writer */
+static int ipixel_fmt_writer_default(const iPixelFmt *fmt,
+	void *bits, int x, int w, const IUINT32 *card)
+{
+	int rshift = fmt->rshift;
+	int gshift = fmt->gshift;
+	int bshift = fmt->bshift;
+	int ashift = fmt->ashift;
+	int rloss = fmt->rloss;
+	int gloss = fmt->gloss;
+	int bloss = fmt->bloss;
+	int aloss = fmt->aloss;
+	IUINT32 r, g, b, a, cc;
+	IUINT8 *dst = ((IUINT8*)bits) + fmt->pixelbyte * x;
+	switch (fmt->pixelbyte) {
+	case 1: 
+		for (; w > 0; x++, card++, w--) {
+			_ipixel_load_card(card, r, g, b, a);
+			r = (r >> rloss) << rshift;
+			g = (g >> gloss) << gshift;
+			b = (b >> bloss) << bshift;
+			a = (a >> aloss) << ashift;
+			cc = r | g | b | a;
+			_ipixel_store(8, dst, 0, cc);
+			dst += 1;
+		}
+		break;
+	case 2:
+		for (; w > 0; x++, card++, w--) {
+			_ipixel_load_card(card, r, g, b, a);
+			r = (r >> rloss) << rshift;
+			g = (g >> gloss) << gshift;
+			b = (b >> bloss) << bshift;
+			a = (a >> aloss) << ashift;
+			cc = r | g | b | a;
+			_ipixel_store(16, dst, 0, cc);
+			dst += 2;
+		}
+		break;
+	case 3:
+		for (; w > 0; x++, card++, w--) {
+			_ipixel_load_card(card, r, g, b, a);
+			r = (r >> rloss) << rshift;
+			g = (g >> gloss) << gshift;
+			b = (b >> bloss) << bshift;
+			a = (a >> aloss) << ashift;
+			cc = r | g | b | a;
+			_ipixel_store(24, dst, 0, cc);
+			dst += 3;
+		}
+		break;
+	case 4:
+		for (; w > 0; x++, card++, w--) {
+			_ipixel_load_card(card, r, g, b, a);
+			r = (r >> rloss) << rshift;
+			g = (g >> gloss) << gshift;
+			b = (b >> bloss) << bshift;
+			a = (a >> aloss) << ashift;
+			cc = r | g | b | a;
+			_ipixel_store(32, dst, 0, cc);
+			dst += 4;
+		}
+		break;
+	}
+	return 0;
+}
+
+
+/* free format default reader */
+static int ipixel_fmt_reader_default(const iPixelFmt *fmt, 
+	const void *bits, int x, int w, IUINT32 *card)
+{
+	IUINT32 rmask = fmt->rmask;
+	IUINT32 gmask = fmt->gmask;
+	IUINT32 bmask = fmt->bmask;
+	IUINT32 amask = fmt->amask;
+	int rshift = fmt->rshift;
+	int gshift = fmt->gshift;
+	int bshift = fmt->bshift;
+	int ashift = fmt->ashift;
+	int rloss = fmt->rloss;
+	int gloss = fmt->gloss;
+	int bloss = fmt->bloss;
+	int aloss = fmt->aloss;
+	const IUINT8 *rscale = &_ipixel_fmt_scale[8 - rloss][0];
+	const IUINT8 *gscale = &_ipixel_fmt_scale[8 - gloss][0];
+	const IUINT8 *bscale = &_ipixel_fmt_scale[8 - bloss][0];
+	const IUINT8 *ascale = &_ipixel_fmt_scale[8 - aloss][0];
+	const IUINT8 *src = ((const IUINT8*)bits) + fmt->pixelbyte * x;
+	IUINT32 r, g, b, a, cc;
+	switch (fmt->pixelbyte) {
+	case 1:
+		for (; w > 0; x++, card++, w--) {
+			cc = _ipixel_fetch(8, src, 0);
+			r = rscale[(cc & rmask) >> rshift];
+			g = gscale[(cc & gmask) >> gshift];
+			b = bscale[(cc & bmask) >> bshift];
+			a = ascale[(cc & amask) >> ashift];
+			src += 1;
+			card[0] = IRGBA_TO_A8R8G8B8(r, g, b, a);
+		}
+		break;
+	case 2:
+		for (; w > 0; x++, card++, w--) {
+			cc = _ipixel_fetch(16, src, 0);
+			r = rscale[(cc & rmask) >> rshift];
+			g = gscale[(cc & gmask) >> gshift];
+			b = bscale[(cc & bmask) >> bshift];
+			a = ascale[(cc & amask) >> ashift];
+			src += 2;
+			card[0] = IRGBA_TO_A8R8G8B8(r, g, b, a);
+		}
+		break;
+	case 3:
+		for (; w > 0; x++, card++, w--) {
+			cc = _ipixel_fetch(24, src, 0);
+			r = rscale[(cc & rmask) >> rshift];
+			g = gscale[(cc & gmask) >> gshift];
+			b = bscale[(cc & bmask) >> bshift];
+			a = ascale[(cc & amask) >> ashift];
+			src += 3;
+			card[0] = IRGBA_TO_A8R8G8B8(r, g, b, a);
+		}
+		break;
+	case 4:
+		for (; w > 0; x++, card++, w--) {
+			cc = _ipixel_fetch(32, src, 0);
+			r = rscale[(cc & rmask) >> rshift];
+			g = gscale[(cc & gmask) >> gshift];
+			b = bscale[(cc & bmask) >> bshift];
+			a = ascale[(cc & amask) >> ashift];
+			src += 4;
+			card[0] = IRGBA_TO_A8R8G8B8(r, g, b, a);
+		}
+		break;
+	}
+	return 0;
+}
+
+
+/* ipixel_slow: default slow converter */
+long ipixel_fmt_slow(const iPixelFmt *dfmt, void *dbits, long dpitch, 
+	int dx, const iPixelFmt *sfmt, const void *sbits, long spitch, 
+	int sx, int w, int h, IUINT32 mask, int mode)
+{
+	int flip, sbpp, dbpp, i, j;
+	int transparent;
+
+	flip = mode & (IPIXEL_FLIP_HFLIP | IPIXEL_FLIP_VFLIP);
+	transparent = (mode & IPIXEL_BLIT_MASK)? 1 : 0;
+
+	sbpp = sfmt->bpp;
+	dbpp = dfmt->bpp;
+
+	if (flip & IPIXEL_FLIP_VFLIP) { 
+		sbits = (const IUINT8*)sbits + spitch * (h - 1); 
+		spitch = -spitch; 
+	} 
+
+	for (j = 0; j < h; j++) {
+		IUINT32 cc = 0, r, g, b, a;
+		int incx, x1, x2 = dx;
+
+		if ((flip & IPIXEL_FLIP_HFLIP) == 0) x1 = sx, incx = 1;
+		else x1 = sx + w - 1, incx = -1;
+
+		for (i = w; i > 0; x1 += incx, x2++, i--) {
+			switch (sbpp) {
+				case  1: cc = _ipixel_fetch(1, sbits, x1); break;
+				case  4: cc = _ipixel_fetch(4, sbits, x1); break;
+				case  8: cc = _ipixel_fetch(8, sbits, x1); break;
+				case 16: cc = _ipixel_fetch(16, sbits, x1); break;
+				case 24: cc = _ipixel_fetch(24, sbits, x1); break;
+				case 32: cc = _ipixel_fetch(32, sbits, x1); break;
+			}
+
+			if (transparent && cc == mask) 
+				continue;
+
+			IPIXEL_FMT_TO_RGBA(sfmt, cc, r, g, b, a);
+			IPIXEL_FMT_FROM_RGBA(dfmt, cc, r, g, b, a);
+
+			switch (dbpp) {
+				case  1: _ipixel_store(1, dbits, x2, cc); break;
+				case  4: _ipixel_store(4, dbits, x2, cc); break;
+				case  8: _ipixel_store(8, dbits, x2, cc); break;
+				case 16: _ipixel_store(16, dbits, x2, cc); break;
+				case 24: _ipixel_store(24, dbits, x2, cc); break;
+				case 32: _ipixel_store(32, dbits, x2, cc); break;
+			}
+		}
+
+		sbits = (const IUINT8*)sbits + spitch;
+		dbits = (IUINT8*)dbits + dpitch;
+	}
+
+	return 0;
+}
+
+
+/* ipixel_fmt_cvt: free format convert
+ * you must provide a working memory pointer to mem. if mem eq NULL,
+ * this function will do nothing but returns how many bytes needed in mem
+ * dfmt   - dest pixel format structure
+ * dbits  - dest bits
+ * dpitch - dest pitch (row stride)
+ * dx     - dest x offset
+ * sfmt   - source pixel format structure
+ * sbits  - source bits
+ * spitch - source pitch (row stride)
+ * sx     - source x offset
+ * w      - width
+ * h      - height
+ * mask   - mask color (colorkey), no effect without IPIXEL_BLIT_MASK
+ * mode   - IPIXEL_FLIP_HFLIP | IPIXEL_FLIP_VFLIP | IPIXEL_BLIT_MASK ..
+ * mem    - work memory
+ * for transparent converting, set mode with IPIXEL_BLIT_MASK, it will 
+ * skip the colors equal to 'mask' parameter.
+ */
+long ipixel_fmt_cvt(const iPixelFmt *dfmt, void *dbits, long dpitch, 
+	int dx, const iPixelFmt *sfmt, const void *sbits, long spitch, int sx,
+	int w, int h, IUINT32 mask, int mode, void *mem)
+{
+	if (mem == NULL) {
+		return (long)(w * sizeof(IUINT32));
+	}
+
+	if (dfmt->format != IPIX_FMT_UNKNOWN && 
+		sfmt->format != IPIX_FMT_UNKNOWN) {
+		return ipixel_convert(dfmt->format, dbits, dpitch, dx,
+				sfmt->format, sbits, spitch, sx, w, h, mask, mode, 
+				NULL, NULL, mem);
+	}
+
+	if (dfmt->bpp == sfmt->bpp &&
+		dfmt->type == sfmt->type &&
+		dfmt->alpha == sfmt->alpha) {
+		if (dfmt->rmask == sfmt->rmask &&
+			dfmt->gmask == sfmt->gmask &&
+			dfmt->bmask == sfmt->bmask &&
+			dfmt->amask == sfmt->amask) {
+			ipixel_blit(sfmt->bpp, dbits, dpitch, dx, sbits, spitch, 
+					sx, w, h, mask, mode);
+			return 0;
+		}
+	}
+
+	if ((mode & IPIXEL_BLIT_MASK) == 0) {
+		iPixelFmtReader reader = ipixel_fmt_get_reader(sfmt->bpp, 0);
+		iPixelFmtWriter writer = ipixel_fmt_get_writer(dfmt->bpp, 0);
+		iFetchProc fetch = NULL;
+		iStoreProc store = NULL;
+		if (sfmt->format >= 0 && sfmt->format < IPIX_FMT_COUNT) 
+			fetch = ipixel_get_fetch(sfmt->format, 0);
+		if (dfmt->format >= 0 && dfmt->format < IPIX_FMT_COUNT)
+			store = ipixel_get_store(dfmt->format, 0);
+		if (reader != NULL && writer != NULL) {
+			IUINT32 *card = (IUINT32*)mem;
+			int j;
+			if (mode & IPIXEL_FLIP_VFLIP) { 
+				sbits = (const IUINT8*)sbits + spitch * (h - 1); 
+				spitch = -spitch; 
+			} 
+			for (j = 0; j < h; j++) {
+				if (fetch) {
+					fetch(sbits, sx, w, card, NULL);
+				}	else {
+					reader(sfmt, sbits, sx, w, card);
+				}
+				if (mode & IPIXEL_FLIP_HFLIP) {
+					ipixel_card_reverse(card, w);
+				}
+				if (store) {
+					store(dbits, card, dx, w, NULL);
+				}	else {
+					writer(dfmt, dbits, dx, w, card);
+				}
+				sbits = (const IUINT8*)sbits + spitch;
+				dbits = (IUINT8*)dbits + dpitch;
+			}
+			return 0;
+		}
+	}
+	return ipixel_fmt_slow(dfmt, dbits, dpitch, dx, sfmt, sbits, spitch,
+			sx, w, h, mask, mode);
+}
+
+
+/**********************************************************************
+ * CLIPPING
  **********************************************************************/
 
 /*
@@ -4179,7 +4686,7 @@ const char *ipixel_composite_opname(int op)
 
 
 /**********************************************************************
- * Palette
+ * Palette & Others
  **********************************************************************/
 
 /* fetch card from IPIX_FMT_C8 */
@@ -4202,9 +4709,72 @@ void ipixel_palette_store(unsigned char *dst, int w, const IUINT32 *card,
 	IUINT32 r, g, b;
 	for (; w > 0; dst++, card++, w--) {
 		ISPLIT_RGB(card[0], r, g, b);
-		dst[0] = ibestfit_color(palette, r, g, b, palsize);
+		dst[0] = ipixel_palette_fit(palette, r, g, b, palsize);
 	}
 }
 
+/* batch draw dots */
+int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
+	IUINT32 color, const short *xylist, int count, const int *clip)
+{
+	IUINT8 *image = (IUINT8*)bits;
+	int cl = 0, cr = w, ct = 0, cb = h, i;
+	int pixelbyte = (bpp + 7) / 8;
+	if (clip) {
+		cl = clip[0];
+		ct = clip[1];
+		cr = clip[2];
+		cb = clip[3];
+		if (cl < 0) cl = 0;
+		if (ct < 0) ct = 0;
+		if (cr > w) cr = w;
+		if (cb > h) cb = h;
+	}
+	switch (pixelbyte) {
+	case 1:
+		for (i = count; i > 0; xylist += 2, i--) {
+			int x = xylist[0];
+			int y = xylist[1];
+			if (((x - cl) | (y - ct) | (cr - x) | (cb - y)) >= 0) {
+				IUINT8 *line = image + pitch * y;
+				_ipixel_store(8, line, x, color);
+			}
+		}
+		break;
+	case 2:
+		for (i = count; i > 0; xylist += 2, i--) {
+			int x = xylist[0];
+			int y = xylist[1];
+			if (((x - cl) | (y - ct) | (cr - x) | (cb - y)) >= 0) {
+				IUINT8 *line = image + pitch * y;
+				_ipixel_store(16, line, x, color);
+			}
+		}
+		break;
+	case 3:
+		for (i = count; i > 0; xylist += 2, i--) {
+			int x = xylist[0];
+			int y = xylist[1];
+			if (((x - cl) | (y - ct) | (cr - x) | (cb - y)) >= 0) {
+				IUINT8 *line = image + pitch * y;
+				_ipixel_store(24, line, x, color);
+			}
+		}
+		break;
+	case 4:
+		for (i = count; i > 0; xylist += 2, i--) {
+			int x = xylist[0];
+			int y = xylist[1];
+			if (((x - cl) | (y - ct) | (cr - x) | (cb - y)) >= 0) {
+				IUINT8 *line = image + pitch * y;
+				_ipixel_store(24, line, x, color);
+			}
+		}
+		break;
+	}
+	return 0;
+}
 
+
+/* vim: set ts=4 sw=4 tw=0 noet :*/
 

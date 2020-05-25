@@ -2,6 +2,9 @@
  *
  * ibmbits.h - bitmap bits accessing
  *
+ * Maintainer: skywind3000 (at) gmail.com, 2009, 2010, 2011, 2013
+ * Homepage: https://github.com/skywind3000/pixellib
+ *
  * FEATURES:
  *
  * - up to 64 pixel-formats supported
@@ -9,11 +12,34 @@
  * - storing card(A8R8G8B8) to any pixel-formats
  * - drawing scanline (copy/blend/additive) to any pixel-formats
  * - blit (with/without color key) between bitmaps
- * - converting between any formats to another
- * - compositing with 35 operators
+ * - converting between any format to another one
+ * - compositing scanline with 35 operators
  * - many useful macros to access/process pixels
  * - all the routines can be replaced by calling **_set_**
  * - using 203KB static memory for look-up-tables
+ * - self contained, C89 compatible
+ *
+ * INTERFACES:
+ *
+ * - ipixel_get_fetch: get function to fetch pixels into A8R8G8B8 format.
+ * - ipixel_get_store: get function to store pixels from A8R8G8B8 format.
+ * - ipixel_get_span_proc: get function to draw scanline with cover.
+ * - ipixel_get_hline_proc: get function to draw horizontal line with cover.
+ * - ipixel_blit: blit between two bitmaps with same color depth.
+ * - ipixel_blend: blend between two bitmaps with different pixel-format.
+ * - ipixel_convert: convert pixel-format.
+ * - ipixel_fmt_init: initialize customized pixel-format with rgb masks.
+ * - ipixel_fmt_cvt: convert between customized pixel-formats.
+ * - ipixel_composite_get: get scanline compositor with 35 operators.
+ * - ipixel_clip: valid rectangle clip.
+ * - ipixel_set_dots: batch draw dots from the position array to a bitmap.
+ * - ipixel_palette_fit: fint best fit color in the palette.
+ * - ipixel_palette_fetch: fetch from color index buffer to A8R8G8B8.
+ * - ipixel_palette_store: store from A8R8G8B8 to color index buffer.
+ * - ipixel_card_reverse: reverse A8R8G8B8 scanline.
+ * - ipixel_card_shuffle: color components shuffle.
+ * - ipixel_card_multi: A8R8G8B8 scanline color multiplication.
+ * - ipixel_card_cover: A8R8G8B8 scanline coverage.
  *
  * HISTORY:
  *
@@ -25,10 +51,11 @@
  * 2010.10.25  skywind  implement bliting and converting and cliping
  * 2011.03.04  skywind  implement card operations
  * 2011.08.10  skywind  implement compositing
+ * 2013.09.11  skywind  free format converting
  *
  **********************************************************************/
-#ifndef __IBMBITS_H__
-#define __IBMBITS_H__
+#ifndef _IBMBITS_H_
+#define _IBMBITS_H_
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -227,6 +254,7 @@
 #define IPIX_FMT_A1              63
 
 #define IPIX_FMT_COUNT           64
+#define IPIX_FMT_UNKNOWN         (-1)
 
 /* pixel format types */
 #define IPIX_FMT_TYPE_ARGB       0
@@ -253,7 +281,7 @@ struct IPIXELFMT
     int type;                /* IPIX_FMT_TYPE_...       */
     int pixelbyte;           /* nbytes per pixel        */
     const char *name;        /* name string             */
-    IUINT32 rmask;           /* red component mask      */        
+    IUINT32 rmask;           /* red component mask      */
     IUINT32 gmask;           /* green component mask    */
     IUINT32 bmask;           /* blue component mask     */
     IUINT32 amask;           /* alpha component mask    */
@@ -285,6 +313,7 @@ struct iColorIndex
 
 typedef struct IRGB IRGB;
 typedef struct iColorIndex iColorIndex;
+typedef struct IPIXELFMT iPixelFmt;
 
 
 /* scanline fetch: fetching from different pixel formats to A8R8GB8 */
@@ -357,6 +386,9 @@ extern unsigned char ipixel_blend_lut[2048 * 2];
 extern unsigned char _ipixel_mullut[256][256];  /* [x][y] = x * y / 255 */
 extern unsigned char _ipixel_divlut[256][256];  /* [x][y] = y * 255 / x */
 
+/* component scale for 0-8 bits */
+extern unsigned char _ipixel_fmt_scale[9][256];
+
 #define ICLIP_256(x) IMINMAX256[256 + (x)]
 #define ICLIP_FAST(x) ( (IUINT32) ( (IUINT8) ((x) | (0 - ((x) >> 8))) ) )
 
@@ -408,7 +440,7 @@ void ipixel_set_proc(int pixfmt, int type, void *proc);
 
 
 /* find the best fit color in palette */
-int ibestfit_color(const IRGB *pal, int r, int g, int b, int palsize);
+int ipixel_palette_fit(const IRGB *pal, int r, int g, int b, int palsize);
 
 /* convert palette to index */
 int ipalette_to_index(iColorIndex *index, const IRGB *pal, int palsize);
@@ -566,9 +598,11 @@ void ipixel_card_cover(IUINT32 *card, int size, const IUINT8 *cover);
 void ipixel_card_over(IUINT32 *dst, int size, const IUINT32 *card, 
 	const IUINT8 *cover);
 
+/* card shuffle */
+void ipixel_card_shuffle(IUINT32 *card, int w, int a, int b, int c, int d);
+
 /* card proc set */
 void ipixel_card_set_proc(int id, void *proc);
-
 
 
 /**********************************************************************
@@ -614,6 +648,66 @@ iPixelCvt ipixel_cvt_get(int dfmt, int sfmt, int istransparent);
 long ipixel_convert(int dfmt, void *dbits, long dpitch, int dx, int sfmt, 
 	const void *sbits, long spitch, int sx, int w, int h, IUINT32 mask, 
 	int mode, const iColorIndex *didx, const iColorIndex *sidx, void *mem);
+
+
+/**********************************************************************
+ * FREE FORMAT CONVERT
+ **********************************************************************/
+
+/* free format reader procedure */
+typedef int (*iPixelFmtReader)(const iPixelFmt *fmt, 
+		const void *bits, int x, int w, IUINT32 *card);
+
+/* free format writer procedure */
+typedef int (*iPixelFmtWriter)(const iPixelFmt *fmt,
+		void *bits, int x, int w, const IUINT32 *card);
+
+/* set free format reader */
+void ipixel_fmt_set_reader(int depth, iPixelFmtReader reader);
+
+/* set free format writer */
+void ipixel_fmt_set_writer(int depth, iPixelFmtWriter writer);
+
+/* get free format reader */
+iPixelFmtReader ipixel_fmt_get_reader(int depth, int isdefault);
+
+/* get free format writer */
+iPixelFmtWriter ipixel_fmt_get_writer(int depth, int isdefault);
+
+
+/* ipixel_fmt_init: init pixel format structure
+ * depth: color bits, one of 8, 16, 24, 32
+ * rmask: mask for red, eg:   0x00ff0000
+ * gmask: mask for green, eg: 0x0000ff00
+ * bmask: mask for blue, eg:  0x000000ff
+ * amask: mask for alpha, eg: 0xff000000
+ */
+int ipixel_fmt_init(iPixelFmt *fmt, int depth, 
+	IUINT32 rmask, IUINT32 gmask, IUINT32 bmask, IUINT32 amask);
+
+
+/* ipixel_fmt_cvt: free format convert
+ * you must provide a working memory pointer to mem. if mem eq NULL,
+ * this function will do nothing but returns how many bytes needed in mem
+ * dfmt   - dest pixel format structure
+ * dbits  - dest bits
+ * dpitch - dest pitch (row stride)
+ * dx     - dest x offset
+ * sfmt   - source pixel format structure
+ * sbits  - source bits
+ * spitch - source pitch (row stride)
+ * sx     - source x offset
+ * w      - width
+ * h      - height
+ * mask   - mask color (colorkey), no effect without IPIXEL_BLIT_MASK
+ * mode   - IPIXEL_FLIP_HFLIP | IPIXEL_FLIP_VFLIP | IPIXEL_BLIT_MASK ..
+ * mem    - work memory
+ * for transparent converting, set mode with IPIXEL_BLIT_MASK, it will 
+ * skip the colors equal to 'mask' parameter.
+ */
+long ipixel_fmt_cvt(const iPixelFmt *dfmt, void *dbits, long dpitch, 
+	int dx, const iPixelFmt *sfmt, const void *sbits, long spitch, int sx,
+	int sw, int sh, IUINT32 mask, int mode, void *mem);
 
 
 /**********************************************************************
@@ -691,7 +785,7 @@ const char *ipixel_composite_opname(int op);
 
 
 /**********************************************************************
- * Palette
+ * Palette & Others
  **********************************************************************/
 
 /* fetch card from IPIX_FMT_C8 */
@@ -701,6 +795,10 @@ void ipixel_palette_fetch(const unsigned char *src, int w, IUINT32 *card,
 /* store card into IPIX_FMT_C8 */
 void ipixel_palette_store(unsigned char *dst, int w, const IUINT32 *card, 
 	const IRGB *palette, int palsize);
+
+/* batch draw dots */
+int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
+	IUINT32 color, const short *xylist, int count, const int *clip);
 
 
 /**********************************************************************
@@ -842,7 +940,6 @@ void ipixel_palette_store(unsigned char *dst, int w, const IUINT32 *card,
 
 #define _ipixel_fetch(nbits, ptr, off) _ipixel_fetch_##nbits(ptr, off)
 #define _ipixel_store(nbits, ptr, off, c) _ipixel_store_##nbits(ptr, off, c)
-
 
 
 
@@ -1073,9 +1170,9 @@ void ipixel_palette_store(unsigned char *dst, int w, const IUINT32 *card,
             IUINT32 __X2 = ((r) * __b); \
             IUINT32 __X3 = ((g) * __b); \
             IUINT32 __X4 = ((b) * __b); \
-			__X2 = (__X2 + (__X2 >> 8)) >> 8; \
-			__X3 = (__X3 + (__X3 >> 8)) >> 8; \
-			__X4 = (__X4 + (__X4 >> 8)) >> 8; \
+            __X2 = (__X2 + (__X2 >> 8)) >> 8; \
+            __X3 = (__X3 + (__X3 >> 8)) >> 8; \
+            __X4 = (__X4 + (__X4 >> 8)) >> 8; \
             c = _ipixel_asm_8888(__X1, __X2, __X3, __X4); \
         }   while (0)
 
@@ -2119,6 +2216,26 @@ extern IUINT32 _ipixel_cvt_lut_B2G2R2A2[256];
 		} \
     }   while (0)
 
+#define IPIXEL_FMT_FROM_RGBA(fmt, cc, r, g, b, a) do { \
+		IUINT32 __X1 = ((r) >> (fmt)->rloss) << (fmt)->rshift; \
+		IUINT32 __X2 = ((g) >> (fmt)->gloss) << (fmt)->gshift; \
+		IUINT32 __X3 = ((b) >> (fmt)->bloss) << (fmt)->bshift; \
+		IUINT32 __X4 = ((a) >> (fmt)->aloss) << (fmt)->ashift; \
+		(cc) = __X1 | __X2 | __X3 | __X4; \
+	} while (0)
+
+#define IPIXEL_FMT_TO_RGBA(fmt, cc, r, g, b, a) do { \
+		const IUINT8 *__rscale = &_ipixel_fmt_scale[8 - (fmt)->rloss][0]; \
+		const IUINT8 *__gscale = &_ipixel_fmt_scale[8 - (fmt)->gloss][0]; \
+		const IUINT8 *__bscale = &_ipixel_fmt_scale[8 - (fmt)->bloss][0]; \
+		const IUINT8 *__ascale = &_ipixel_fmt_scale[8 - (fmt)->aloss][0]; \
+		(r) = __rscale[((cc) & ((fmt)->rmask)) >> ((fmt)->rshift)]; \
+		(g) = __gscale[((cc) & ((fmt)->gmask)) >> ((fmt)->gshift)]; \
+		(b) = __bscale[((cc) & ((fmt)->bmask)) >> ((fmt)->bshift)]; \
+		(a) = __ascale[((cc) & ((fmt)->amask)) >> ((fmt)->ashift)]; \
+	} while (0)
+
+
 
 /**********************************************************************
  * MACRO: PIXEL FILLING FAST MACRO
@@ -2398,5 +2515,5 @@ extern IUINT32 _ipixel_cvt_lut_B2G2R2A2[256];
 
 #endif
 
-
+/* vim: set ts=4 sw=4 tw=0 noet :*/
 
