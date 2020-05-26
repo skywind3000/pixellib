@@ -4730,6 +4730,8 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 		if (cr > w) cr = w;
 		if (cb > h) cb = h;
 	}
+	cr--;    /* use range [cl, cr] */
+	cb--;
 	switch (pixelbyte) {
 	case 1:
 		for (i = count; i > 0; xylist += 2, i--) {
