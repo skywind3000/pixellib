@@ -386,8 +386,8 @@ extern unsigned char ipixel_blend_lut[2048 * 2];
 extern unsigned char _ipixel_mullut[256][256];  /* [x][y] = x * y / 255 */
 extern unsigned char _ipixel_divlut[256][256];  /* [x][y] = y * 255 / x */
 
-/* component scale for 0-8 bits */
-extern unsigned char _ipixel_fmt_scale[9][256];
+/* color component scale for 0-8 bits */
+extern unsigned char _ipixel_bit_scale[9][256];
 
 #define ICLIP_256(x) IMINMAX256[256 + (x)]
 #define ICLIP_FAST(x) ( (IUINT32) ( (IUINT8) ((x) | (0 - ((x) >> 8))) ) )
@@ -1159,6 +1159,8 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 #define _ipixel_unnorm(color) ((((color) << 8) - (color)) >> 8)
 #define _imul_y_div_255(x, y) (((x) * _ipixel_norm(y)) >> 8)
 #define _ipixel_fast_div_255(x) (((x) + (((x) + 257) >> 8)) >> 8)
+#define _ipixel_8_to_9(x) (((color) >> 7) + (color << 1))
+#define _ipixel_8_to_10(x) (((color) >> 6) + (color << 2))
 
 #define _ipixel_to_gray(r, g, b) \
         ((19595 * (r) + 38469 * (g) + 7472 * (b)) >> 16)
@@ -1379,7 +1381,7 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 #define IRGBA_FROM_G8(c, r, g, b, a) do { \
         (r) = (g) = (b) = (c); (a) = 255; } while (0)
 #define IRGBA_FROM_A8(c, r, g, b, a) do { \
-        (r) = (g) = (b) = 0; (a) = (c); } while (0)
+        (r) = (g) = (b) = 255; (a) = (c); } while (0)
 
 #define IRGBA_FROM_R3G3B2(c, r, g, b, a) do { \
         _ipixel_disasm_332(c, r, g, b); (a) = 255; } while (0)
@@ -1404,14 +1406,14 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 #define IRGBA_FROM_X4G4(c, r, g, b, a) do { \
         (r) = (g) = (b) = _ipixel_scale_4[c]; (a) = 255; } while (0)
 #define IRGBA_FROM_X4A4(c, r, g, b, a) do { \
-        (r) = (g) = (b) = 0; (a) = _ipixel_scale_4[c]; } while (0)
+        (r) = (g) = (b) = 255; (a) = _ipixel_scale_4[c]; } while (0)
 #define IRGBA_FROM_C4X4(c, r, g, b, a) do { \
         _ipixel_RGBA_from_index(_ipixel_src_index, (c) >> 4, r, g, b, a); \
         } while (0)
 #define IRGBA_FROM_G4X4(c, r, g, b, a) do { \
         (r) = (g) = (b) = _ipixel_scale_4[(c) >> 4]; (a) = 255; } while (0)
 #define IRGBA_FROM_A4X4(c, r, g, b, a) do { \
-        (r) = (g) = (b) = 0; (a) = _ipixel_scale_4[(c) >> 4]; } while (0)
+        (r) = (g) = (b) = 255; (a) = _ipixel_scale_4[(c) >> 4]; } while (0)
 
 /* pixel format: 4 bits */
 #define IRGBA_FROM_C4(c, r, g, b, a) IRGBA_FROM_X4C4(c, r, g, b, a)
@@ -1441,7 +1443,7 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 #define IRGBA_FROM_G1(c, r, g, b, a) do { \
         (r) = (g) = (b) = _ipixel_scale_1[c]; (a) = 255; } while (0)
 #define IRGBA_FROM_A1(c, r, g, b, a) do { \
-        (r) = (g) = (b) = 0; (a) = _ipixel_scale_1[c]; } while (0)
+        (r) = (g) = (b) = 255; (a) = _ipixel_scale_1[c]; } while (0)
 
 
 /**********************************************************************
@@ -2225,10 +2227,10 @@ extern IUINT32 _ipixel_cvt_lut_B2G2R2A2[256];
 	} while (0)
 
 #define IPIXEL_FMT_TO_RGBA(fmt, cc, r, g, b, a) do { \
-		const IUINT8 *__rscale = &_ipixel_fmt_scale[8 - (fmt)->rloss][0]; \
-		const IUINT8 *__gscale = &_ipixel_fmt_scale[8 - (fmt)->gloss][0]; \
-		const IUINT8 *__bscale = &_ipixel_fmt_scale[8 - (fmt)->bloss][0]; \
-		const IUINT8 *__ascale = &_ipixel_fmt_scale[8 - (fmt)->aloss][0]; \
+		const IUINT8 *__rscale = &_ipixel_bit_scale[(fmt)->rloss][0]; \
+		const IUINT8 *__gscale = &_ipixel_bit_scale[(fmt)->gloss][0]; \
+		const IUINT8 *__bscale = &_ipixel_bit_scale[(fmt)->bloss][0]; \
+		const IUINT8 *__ascale = &_ipixel_bit_scale[(fmt)->aloss][0]; \
 		(r) = __rscale[((cc) & ((fmt)->rmask)) >> ((fmt)->rshift)]; \
 		(g) = __gscale[((cc) & ((fmt)->gmask)) >> ((fmt)->gshift)]; \
 		(b) = __bscale[((cc) & ((fmt)->bmask)) >> ((fmt)->bshift)]; \

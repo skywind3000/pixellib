@@ -306,7 +306,7 @@ unsigned char ipixel_blend_lut[2048 * 2];
 unsigned char _ipixel_mullut[256][256];   /* [x][y] = x * y / 255 */
 unsigned char _ipixel_divlut[256][256];   /* [x][y] = y * 255 / x */
 
-unsigned char _ipixel_fmt_scale[9][256];   /* component scale for 0-8 bits */
+unsigned char _ipixel_bit_scale[9][256];   /* component scale for 0-8 bits */
 
 /* memcpy hook */
 void *(*ipixel_memcpy_hook)(void *dst, const void *src, size_t size) = NULL;
@@ -1460,11 +1460,26 @@ static const int ipixel_access_lut_fmt[IPIX_FMT_COUNT] = {
 
 static int ipixel_lut_inited = 0;
 
-void ipixel_lut_init(void)
+void ipixel_init_lut(void)
 {
 	int i, j, k;
 
 	if (ipixel_lut_inited != 0) return;
+
+	/* init bit scaling table */
+	for (i = 0; i < 9; i++) {
+		IUINT8 *table = _ipixel_bit_scale[i];
+		IUINT32 maxvalue = (1 << (8 - i)) - 1;
+		int k = 0;
+		if (maxvalue > 0) {
+			for (k = 0; k <= maxvalue; k++) {
+				table[k] = k * 255 / maxvalue;
+			}
+		}
+		for (; k < 256; k++) {
+			table[k] = 255;
+		}
+	}
 
 	#define IPIXEL_LUT_INIT(fmt, nbytes) \
 		ipixel_lut_##nbytes##_to_4(IPIX_FMT_##fmt, IPIX_FMT_A8R8G8B8, \
@@ -1525,7 +1540,6 @@ void ipixel_lut_init(void)
 			_ipixel_divlut[i][j] = 255;
 		}
 	}
-
 	ipixel_lut_inited = 1;
 }
 
@@ -1536,7 +1550,7 @@ iFetchProc ipixel_get_fetch(int pixfmt, int access_mode)
 	if (pixfmt < 0 || pixfmt >= IPIX_FMT_COUNT) return NULL;
 	if (access_mode == IPIXEL_ACCESS_MODE_NORMAL) {
 		int id = ipixel_access_lut_fmt[pixfmt];
-		if (ipixel_lut_inited == 0) ipixel_lut_init();
+		if (ipixel_lut_inited == 0) ipixel_init_lut();
 		if (id >= 0) return ipixel_access_lut[id].fetch;
 		return ipixel_access_proc[pixfmt].fetch;
 	}
@@ -1552,7 +1566,7 @@ iStoreProc ipixel_get_store(int pixfmt, int access_mode)
 	assert(pixfmt >= 0 && pixfmt < IPIX_FMT_COUNT);
 	if (pixfmt < 0 || pixfmt >= IPIX_FMT_COUNT) return NULL;
 	if (access_mode == IPIXEL_ACCESS_MODE_NORMAL) {
-		if (ipixel_lut_inited == 0) ipixel_lut_init();
+		if (ipixel_lut_inited == 0) ipixel_init_lut();
 		return ipixel_access_proc[pixfmt].store;
 	}
 	if (access_mode == IPIXEL_ACCESS_MODE_ACCURATE) {
@@ -1568,7 +1582,7 @@ iFetchPixelProc ipixel_get_fetchpixel(int pixfmt, int access_mode)
 	if (pixfmt < 0 || pixfmt >= IPIX_FMT_COUNT) return NULL;
 	if (access_mode == IPIXEL_ACCESS_MODE_NORMAL) {
 		int id = ipixel_access_lut_fmt[pixfmt];
-		if (ipixel_lut_inited == 0) ipixel_lut_init();
+		if (ipixel_lut_inited == 0) ipixel_init_lut();
 		if (id >= 0) return ipixel_access_lut[id].pixel;
 		return ipixel_access_proc[pixfmt].fetchpixel;
 	}
@@ -2212,7 +2226,7 @@ iSpanDrawProc ipixel_get_span_proc(int fmt, int op, int builtin)
 		abort();
 		return NULL;
 	}
-	if (ipixel_lut_inited == 0) ipixel_lut_init();
+	if (ipixel_lut_inited == 0) ipixel_init_lut();
 	if (builtin) {
 		if (fmt < 0) return ipixel_span_draw_proc_over_32;
 		if (op == 0) return ipixel_span_proc_list[fmt].blend_builtin;
@@ -2233,7 +2247,7 @@ void ipixel_set_span_proc(int fmt, int op, iSpanDrawProc proc)
 		abort();
 		return;
 	}
-	if (ipixel_lut_inited == 0) ipixel_lut_init();
+	if (ipixel_lut_inited == 0) ipixel_init_lut();
 	if (fmt < 0) {
 		if (proc != NULL) {
 			ipixel_span_draw_over = proc;
@@ -3031,7 +3045,7 @@ iHLineDrawProc ipixel_get_hline_proc(int fmt, int op, int builtin)
 		abort();
 		return NULL;
 	}
-	if (ipixel_lut_inited == 0) ipixel_lut_init();
+	if (ipixel_lut_inited == 0) ipixel_init_lut();
 	if (builtin) {
 		if (op == 0) 
 			return ipixel_hline_proc_list[fmt].blend_builtin;
@@ -3057,7 +3071,7 @@ void ipixel_set_hline_proc(int fmt, int op, iHLineDrawProc proc)
 		abort();
 		return;
 	}
-	if (ipixel_lut_inited == 0) ipixel_lut_init();
+	if (ipixel_lut_inited == 0) ipixel_init_lut();
 	if (op == 0) {
 		if (proc != NULL) {
 			ipixel_hline_proc_list[fmt].blend = proc;
@@ -3713,28 +3727,6 @@ static int ipixel_fmt_writer_default(const iPixelFmt *fmt,
 	void *bits, int x, int w, const IUINT32 *card);
 
 
-/* initialize _ipixel_fmt_scale */
-static void ipixel_fmt_make_lut(void) 
-{
-	static int inited = 0;
-	if (inited == 0) {
-		int i;
-		for (i = 0; i < 9; i++) {
-			IUINT8 *table = _ipixel_fmt_scale[i];
-			IUINT32 maxvalue = (1 << i) - 1;
-			int k = 0;
-			memset(table, 255, 256);
-			if (maxvalue > 0) {
-				for (k = 0; k <= maxvalue; k++) {
-					table[k] = k * 255 / maxvalue;
-				}
-			}
-		}
-		inited = 1;
-	}
-}
-
-
 /* ipixel_fmt_init: init pixel format structure
  * depth: color bits, one of 8, 16, 24, 32
  * rmask: mask for red, eg:   0x00ff0000
@@ -3751,7 +3743,8 @@ int ipixel_fmt_init(iPixelFmt *fmt, int depth,
 	if (depth < 8 || depth > 32) {
 		return -1;
 	}
-	ipixel_fmt_make_lut();
+	if (ipixel_lut_inited == 0) 
+		ipixel_init_lut();
 	for (i = 0; i < IPIX_FMT_COUNT; i++) {
 		if (ipixelfmt[i].amask == amask &&
 			ipixelfmt[i].rmask == rmask &&
@@ -3811,7 +3804,7 @@ void ipixel_fmt_set_reader(int depth, iPixelFmtReader reader)
 {
 	int index = ((depth + 7) / 8) - 1;
 	if (index >= 0 && index < 4) {
-		ipixel_fmt_make_lut();
+		ipixel_init_lut();
 		ipixel_fmt_reader[index] = reader;
 	}
 }
@@ -3833,7 +3826,7 @@ iPixelFmtReader ipixel_fmt_get_reader(int depth, int isdefault)
 	int index = ((depth + 7) / 8) - 1;
 	int inited = 0;
 	if (inited == 0) {
-		ipixel_fmt_make_lut();
+		ipixel_init_lut();
 		inited = 1;
 	}
 	if (index < 0 || index >= 4) return NULL;
@@ -3936,14 +3929,10 @@ static int ipixel_fmt_reader_default(const iPixelFmt *fmt,
 	int gshift = fmt->gshift;
 	int bshift = fmt->bshift;
 	int ashift = fmt->ashift;
-	int rloss = fmt->rloss;
-	int gloss = fmt->gloss;
-	int bloss = fmt->bloss;
-	int aloss = fmt->aloss;
-	const IUINT8 *rscale = &_ipixel_fmt_scale[8 - rloss][0];
-	const IUINT8 *gscale = &_ipixel_fmt_scale[8 - gloss][0];
-	const IUINT8 *bscale = &_ipixel_fmt_scale[8 - bloss][0];
-	const IUINT8 *ascale = &_ipixel_fmt_scale[8 - aloss][0];
+	const IUINT8 *rscale = &_ipixel_bit_scale[fmt->rloss][0];
+	const IUINT8 *gscale = &_ipixel_bit_scale[fmt->gloss][0];
+	const IUINT8 *bscale = &_ipixel_bit_scale[fmt->bloss][0];
+	const IUINT8 *ascale = &_ipixel_bit_scale[fmt->aloss][0];
 	const IUINT8 *src = ((const IUINT8*)bits) + fmt->pixelbyte * x;
 	IUINT32 r, g, b, a, cc;
 	switch (fmt->pixelbyte) {
@@ -4090,13 +4079,9 @@ long ipixel_fmt_cvt(const iPixelFmt *dfmt, void *dbits, long dpitch,
 				NULL, NULL, mem);
 	}
 
-	if (dfmt->bpp == sfmt->bpp &&
-		dfmt->type == sfmt->type &&
-		dfmt->alpha == sfmt->alpha) {
-		if (dfmt->rmask == sfmt->rmask &&
-			dfmt->gmask == sfmt->gmask &&
-			dfmt->bmask == sfmt->bmask &&
-			dfmt->amask == sfmt->amask) {
+	if (dfmt->bpp == sfmt->bpp && dfmt->type == sfmt->type) {
+		if (dfmt->rmask == sfmt->rmask && dfmt->gmask == sfmt->gmask &&
+			dfmt->bmask == sfmt->bmask && dfmt->amask == sfmt->amask) {
 			ipixel_blit(sfmt->bpp, dbits, dpitch, dx, sbits, spitch, 
 					sx, w, h, mask, mode);
 			return 0;
@@ -4616,7 +4601,7 @@ static void ipixel_composite_init(void)
 
 	#undef ipixel_composite_install
 
-	ipixel_lut_init();
+	ipixel_init_lut();
 	ipixel_composite_inited = 1;
 }
 
