@@ -21,18 +21,18 @@
  *
  * INTERFACES:
  *
- * - ipixel_get_fetch: get function to fetch pixels into A8R8G8B8 format.
- * - ipixel_get_store: get function to store pixels from A8R8G8B8 format.
+ * - ipixel_get_fetch: get function to fetch pixels into A8R8G8B8.
+ * - ipixel_get_store: get function to store pixels from A8R8G8B8.
  * - ipixel_get_span_proc: get function to draw scanline with cover.
- * - ipixel_get_hline_proc: get function to draw horizontal line with cover.
+ * - ipixel_get_hline_proc: get function to draw horizontal line.
  * - ipixel_blit: blit between two bitmaps with same color depth.
- * - ipixel_blend: blend between two bitmaps with different pixel-format.
+ * - ipixel_blend: blend between two bitmaps in arbitrary pixel-formats.
  * - ipixel_convert: convert pixel-format.
  * - ipixel_fmt_init: initialize customized pixel-format with rgb masks.
  * - ipixel_fmt_cvt: convert between customized pixel-formats.
  * - ipixel_composite_get: get scanline compositor with 35 operators.
  * - ipixel_clip: valid rectangle clip.
- * - ipixel_set_dots: batch draw dots from the position array to a bitmap.
+ * - ipixel_set_dots: batch draw dots from the pos array to a bitmap.
  * - ipixel_palette_fit: fint best fit color in the palette.
  * - ipixel_palette_fetch: fetch from color index buffer to A8R8G8B8.
  * - ipixel_palette_store: store from A8R8G8B8 to color index buffer.
