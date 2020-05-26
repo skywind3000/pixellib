@@ -12,6 +12,13 @@
 #include "ibitmap.h"
 #include "ibmbits.h"
 
+//---------------------------------------------------------------------
+// ENDIAN
+//---------------------------------------------------------------------
+#ifndef IWORDS_BIG_ENDIAN
+#define IWORDS_BIG_ENDIAN IPIXEL_BIG_ENDIAN
+#endif
+
 
 //---------------------------------------------------------------------
 // IUINT64 / IINT64 definition

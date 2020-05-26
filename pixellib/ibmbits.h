@@ -146,24 +146,24 @@
 /**********************************************************************
  * DETECTION WORD ORDER
  **********************************************************************/
-#ifndef IWORDS_BIG_ENDIAN
+#ifndef IPIXEL_BIG_ENDIAN
     #ifdef _BIG_ENDIAN_
         #if _BIG_ENDIAN_
-            #define IWORDS_BIG_ENDIAN 1
+            #define IPIXEL_BIG_ENDIAN 1
         #endif
     #endif
-    #ifndef IWORDS_BIG_ENDIAN
+    #ifndef IPIXEL_BIG_ENDIAN
         #if defined(__hppa__) || \
             defined(__m68k__) || defined(mc68000) || defined(_M_M68K) || \
             (defined(__MIPS__) && defined(__MISPEB__)) || \
             defined(__ppc__) || defined(__POWERPC__) || defined(_M_PPC) || \
             defined(__sparc__) || defined(__powerpc__) || \
             defined(__mc68000__) || defined(__s390x__) || defined(__s390__)
-            #define IWORDS_BIG_ENDIAN 1
+            #define IPIXEL_BIG_ENDIAN 1
         #endif
     #endif
-    #ifndef IWORDS_BIG_ENDIAN
-        #define IWORDS_BIG_ENDIAN  0
+    #ifndef IPIXEL_BIG_ENDIAN
+        #define IPIXEL_BIG_ENDIAN  0
     #endif
 #endif
 
@@ -254,7 +254,9 @@
 #define IPIX_FMT_A1              63
 
 #define IPIX_FMT_COUNT           64
-#define IPIX_FMT_UNKNOWN         (-1)
+
+/* arbitrary packed format */
+#define IPIX_FMT_PACKED          65
 
 /* pixel format types */
 #define IPIX_FMT_TYPE_ARGB       0
@@ -918,7 +920,7 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 
 
 
-#if IWORDS_BIG_ENDIAN
+#if IPIXEL_BIG_ENDIAN
 #define _ipixel_fetch_24 _ipixel_fetch_24_msb
 #define _ipixel_store_24 _ipixel_store_24_msb
 #define _ipixel_fetch_4  _ipixel_fetch_4_msb
@@ -944,23 +946,23 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 
 
 /**********************************************************************
- * MACRO: Pixel Assembly & Disassembly 
+ * MACRO: Pixel Assemble & Disassemble 
  **********************************************************************/
 
-/* assembly 32 bits */
+/* assemble 32 bits */
 #define _ipixel_asm_8888(a, b, c, d) ((IUINT32)( \
             ((IUINT32)(a) << 24) | \
             ((IUINT32)(b) << 16) | \
             ((IUINT32)(c) <<  8) | \
             ((IUINT32)(d) <<  0)))
 
-/* assembly 24 bits */
+/* assemble 24 bits */
 #define _ipixel_asm_888(a, b, c) ((IUINT32)( \
             ((IUINT32)(a) << 16) | \
             ((IUINT32)(b) <<  8) | \
             ((IUINT32)(c) <<  0)))
 
-/* assembly 16 bits */
+/* assemble 16 bits */
 #define _ipixel_asm_1555(a, b, c, d) ((IUINT16)( \
             ((IUINT16)((a) & 0x80) << 8) | \
             ((IUINT16)((b) & 0xf8) << 7) | \
@@ -984,7 +986,7 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
             ((IUINT16)((c) & 0xf0) << 0) | \
             ((IUINT16)((d) & 0xf0) >> 4)))
 
-/* assembly 8 bits */
+/* assemble 8 bits */
 #define _ipixel_asm_332(a, b, c) ((IUINT8)( \
             ((IUINT8)((a) & 0xe0) >>  0) | \
             ((IUINT8)((b) & 0xe0) >>  3) | \
@@ -1001,7 +1003,7 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
             ((IUINT8)((c) & 0xc0) >> 4) | \
             ((IUINT8)((d) & 0xc0) >> 6)))
 
-/* assembly 4 bits */
+/* assemble 4 bits */
 #define _ipixel_asm_1111(a, b, c, d) ((IUINT8)( \
             ((IUINT8)((a) & 0x80) >> 4) | \
             ((IUINT8)((a) & 0x80) >> 5) | \
@@ -1014,7 +1016,7 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
             ((IUINT8)((c) & 0xc0) >> 7)))
 
 
-/* disassembly 32 bits */
+/* disassemble 32 bits */
 #define _ipixel_disasm_8888(x, a, b, c, d) do { \
             (a) = ((x) >> 24) & 0xff; \
             (b) = ((x) >> 16) & 0xff; \
@@ -1034,14 +1036,14 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
             (c) = ((x) >>  0) & 0xff; \
         }   while (0)
 
-/* disassembly 24 bits */
+/* disassemble 24 bits */
 #define _ipixel_disasm_888(x, a, b, c) do { \
             (a) = ((x) >> 16) & 0xff; \
             (b) = ((x) >>  8) & 0xff; \
             (c) = ((x) >>  0) & 0xff; \
         }   while (0)
 
-/* disassembly 16 bits */
+/* disassemble 16 bits */
 #define _ipixel_disasm_1555(x, a, b, c, d) do { \
             (a) = _ipixel_scale_1[(x) >> 15]; \
             (b) = _ipixel_scale_5[((x) >> 10) & 0x1f]; \
@@ -1093,7 +1095,7 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
             (c) = _ipixel_scale_4[((x) >>  4) & 0xf]; \
         }   while (0)
 
-/* disassembly 8 bits */
+/* disassemble 8 bits */
 #define _ipixel_disasm_233(x, a, b, c) do { \
             (a) = _ipixel_scale_2[((x) >>  6) & 3]; \
             (b) = _ipixel_scale_3[((x) >>  3) & 7]; \
@@ -1125,7 +1127,7 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
             (c) = _ipixel_scale_2[((x) >>  2) & 3]; \
         }   while (0)
 
-/* disassembly 4 bits */
+/* disassemble 4 bits */
 #define _ipixel_disasm_1111(x, a, b, c, d) do { \
             (a) = _ipixel_scale_1[((x) >> 3) & 1]; \
             (b) = _ipixel_scale_1[((x) >> 2) & 1]; \
@@ -1150,6 +1152,34 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
             (b) = _ipixel_scale_2[((x) >> 1) & 3]; \
             (c) = _ipixel_scale_1[((x) >> 0) & 1]; \
         }   while (0)
+
+/* assemble 10 bits */
+#define _ipixel_asm_2101010(a, b, c, d) ((IUINT32)( \
+			((IUINT32)((a) & 0xc0) << 30) | \
+			(((IUINT32)_ipixel_8_to_10(b)) << 20) | \
+			(((IUINT32)_ipixel_8_to_10(c)) << 10) | \
+			(((IUINT32)_ipixel_8_to_10(d)) << 0)))
+
+#define _ipixel_asm_1010102(a, b, c, d) ((IUINT32)( \
+			(((IUINT32)_ipixel_8_to_10(a)) << 22) | \
+			(((IUINT32)_ipixel_8_to_10(b)) << 12) | \
+			(((IUINT32)_ipixel_8_to_10(c)) <<  2) | \
+			((IUINT32)((d) & 0xc0) >> 6)))
+
+/* disassemble 10 bits */
+#define _ipixel_disasm_2101010(x, a, b, c, d) do { \
+			(a) = _ipixel_scale_2[((x) >> 30) & 3]; \
+			(b) = ((x) >> 22) & 0xff; \
+			(c) = ((x) >> 12) & 0xff; \
+			(d) = ((x) >>  2) & 0xff; \
+		}	while (0)
+
+#define _ipixel_disasm_1010102(x, a, b, c, d) do { \
+			(a) = ((x) >> 24) & 0xff; \
+			(b) = ((x) >> 14) & 0xff; \
+			(c) = ((x) >>  4) & 0xff; \
+			(d) = _ipixel_scale_2[(x) & 3]; \
+		}	while (0)
 
 
 /**********************************************************************
@@ -1271,13 +1301,13 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 		} while (0)
 
 
-#if IWORDS_BIG_ENDIAN
+#if IPIXEL_BIG_ENDIAN
 	#define _ipixel_load_card	_ipixel_load_card_msb
 #else
 	#define _ipixel_load_card	_ipixel_load_card_lsb
 #endif
 
-#if IWORDS_BIG_ENDIAN
+#if IPIXEL_BIG_ENDIAN
 	#define _ipixel_card_alpha	0
 #else
 	#define _ipixel_card_alpha	3
@@ -1445,6 +1475,16 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 #define IRGBA_FROM_A1(c, r, g, b, a) do { \
         (r) = (g) = (b) = 255; (a) = _ipixel_scale_1[c]; } while (0)
 
+/* pixel format: 10-10-10-2 bit */
+#define IRGBA_FROM_A2R10G10B10(c, r, g, b, a) \
+		_ipixel_disasm_2101010(c, a, r, g, b)
+#define IRGBA_FROM_A2B10G10R10(c, r, g, b, a) \
+		_ipixel_disasm_2101010(c, a, b, g, r)
+#define IRGBA_FROM_R10G10B10A2(c, r, g, b, a) \
+		_ipixel_disasm_1010102(c, r, g, b, a)
+#define IRGBA_FROM_B10G10R10A2(c, r, g, b, a) \
+		_ipixel_disasm_1010102(c, b, g, r, a)
+
 
 /**********************************************************************
  * MACRO: PIXEL ASSEMBLE
@@ -1528,6 +1568,12 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 #define IRGBA_TO_G1(r, g, b, a)       (IRGBA_TO_G8(r, g, b, a) >> 7)
 #define IRGBA_TO_A1(r, g, b, a)       (IRGBA_TO_A8(r, g, b, a) >> 7)
 
+/* pixel format: 10-10-10-2 bit */
+#define IRGBA_TO_A2R10G10B10(r, g, b, a) _ipixel_asm_2101010(a, r, g, b)
+#define IRGBA_TO_A2B10G10R10(r, g, b, a) _ipixel_asm_2101010(a, b, g, r)
+#define IRGBA_TO_R10G10B10A2(r, g, b, a) _ipixel_asm_1010102(r, g, b, a)
+#define IRGBA_TO_B10G10R10A2(r, g, b, a) _ipixel_asm_1010102(b, g, r, a)
+
 
 /**********************************************************************
  * MACRO: PIXEL FORMAT BPP (bits per pixel)
@@ -1596,7 +1642,10 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 #define IPIX_FMT_BPP_C1               1
 #define IPIX_FMT_BPP_G1               1
 #define IPIX_FMT_BPP_A1               1
-
+#define IPIX_FMT_BPP_A2R10G10B10      32
+#define IPIX_FMT_BPP_A2B10G10R10      32
+#define IPIX_FMT_BPP_R10G10B10A2      32
+#define IPIX_FMT_BPP_B10G10R10A2      32
 
 
 /**********************************************************************
@@ -1639,7 +1688,7 @@ extern IUINT32 _ipixel_cvt_lut_B2G2R2A2[256];
 
 
 /* look-up-tables accessing */
-#if IWORDS_BIG_ENDIAN
+#if IPIXEL_BIG_ENDIAN
 #define IPIXEL_CVT_LUT_2(fmt, x) \
 		(	_ipixel_cvt_lut_##fmt[((x) & 0xff) + 256] | \
 			_ipixel_cvt_lut_##fmt[((x) >>   8) +   0] )

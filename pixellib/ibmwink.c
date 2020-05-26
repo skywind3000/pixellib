@@ -1158,10 +1158,10 @@ static int i_update_mul(int x, int y, int w, IUINT32 *card, void *user)
 		g = g * cg;
 		b = b * cb;
 		a = a * ca;
-		r = _idiv_255(r);
-		g = _idiv_255(g);
-		b = _idiv_255(b);
-		a = _idiv_255(a);
+		r = _ipixel_fast_div_255(r);
+		g = _ipixel_fast_div_255(g);
+		b = _ipixel_fast_div_255(b);
+		a = _ipixel_fast_div_255(a);
 		card[0] = IRGBA_TO_A8R8G8B8(r, g, b, a);
 	}
 	return 0;

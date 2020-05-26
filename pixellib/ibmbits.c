@@ -455,7 +455,7 @@ void ipixel_lut_2_to_4(int sfmt, int dfmt, IUINT32 *table)
 		IUINT32 r1, g1, b1, a1;
 		IUINT32 r2, g2, b2, a2;
 		IUINT32 c1, c2;
-#if IWORDS_BIG_ENDIAN
+#if IPIXEL_BIG_ENDIAN
 		c1 = c << 8;
 		c2 = c;
 #else
@@ -2319,7 +2319,7 @@ void ipixel_card_multi_default(IUINT32 *card, int size, IUINT32 color)
 		IUINT8 *src = (IUINT8*)card;
 		if (a1 == 0) {
 			for (; size > 0; size--) {
-			#if IWORDS_BIG_ENDIAN
+			#if IPIXEL_BIG_ENDIAN
 				src[0] = 0;
 			#else
 				src[3] = 0;
@@ -2330,7 +2330,7 @@ void ipixel_card_multi_default(IUINT32 *card, int size, IUINT32 color)
 		}
 		a1 = _ipixel_norm(a1);
 		for (; size > 0; size--) {
-		#if IWORDS_BIG_ENDIAN
+		#if IPIXEL_BIG_ENDIAN
 			a2 = src[0];
 			src[0] = (IUINT8)((a2 * a1) >> 8);
 		#else
@@ -3756,7 +3756,7 @@ int ipixel_fmt_init(iPixelFmt *fmt, int depth,
 			}
 		}
 	}
-	fmt->format = IPIX_FMT_UNKNOWN;
+	fmt->format = IPIX_FMT_PACKED;
 	fmt->bpp = pixelbyte * 8;
 	fmt->rmask = rmask;
 	fmt->gmask = gmask;
@@ -3765,9 +3765,9 @@ int ipixel_fmt_init(iPixelFmt *fmt, int depth,
 	fmt->alpha = (amask == 0)? 0 : 1;
 	fmt->type = (fmt->alpha)? IPIX_FMT_TYPE_ARGB : IPIX_FMT_TYPE_RGB;
 	fmt->pixelbyte = pixelbyte;
-	fmt->name = "IPIX_FMT_UNKNOWN";
+	fmt->name = "IPIX_FMT_PACKED";
 	for (i = 0; i < 4; i++) {
-		IUINT32 mask;
+		IUINT32 mask = 0;
 		int shift = 0;
 		int loss = 8;
 		switch (i) {
@@ -4072,8 +4072,8 @@ long ipixel_fmt_cvt(const iPixelFmt *dfmt, void *dbits, long dpitch,
 		return (long)(w * sizeof(IUINT32));
 	}
 
-	if (dfmt->format != IPIX_FMT_UNKNOWN && 
-		sfmt->format != IPIX_FMT_UNKNOWN) {
+	if (dfmt->format != IPIX_FMT_PACKED && 
+		sfmt->format != IPIX_FMT_PACKED) {
 		return ipixel_convert(dfmt->format, dbits, dpitch, dx,
 				sfmt->format, sbits, spitch, sx, w, h, mask, mode, 
 				NULL, NULL, mem);

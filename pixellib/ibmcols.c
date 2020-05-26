@@ -2523,8 +2523,8 @@ void ibitmap_draw_ascii(IBITMAP *dst, const IGLYPHFONT *font, int x, int y,
 //=====================================================================
 // 平滑缩放
 //=====================================================================
-static int ifilter_shrink_x_c(IUINT8 *dstpix, IUINT8 *srcpix, int height,
-	long dstpitch, long srcpitch, int dstwidth, int srcwidth)
+static int ifilter_shrink_x_c(IUINT8 *dstpix, const IUINT8 *srcpix, 
+	int height, long dstpitch, long srcpitch, int dstwidth, int srcwidth)
 {
 	IINT32 srcdiff = srcpitch - (srcwidth * 4);
 	IINT32 dstdiff = dstpitch - (dstwidth * 4);
@@ -2570,8 +2570,8 @@ static int ifilter_shrink_x_c(IUINT8 *dstpix, IUINT8 *srcpix, int height,
 	return 0;
 }
 
-static int ifilter_shrink_y_c(IUINT8 *dstpix, IUINT8 *srcpix, int width, 
-	long dstpitch, long srcpitch, int dstheight, int srcheight)
+static int ifilter_shrink_y_c(IUINT8 *dstpix, const IUINT8 *srcpix,
+	int width, long dstpitch, long srcpitch, int dstheight, int srcheight)
 {
 	IINT32 srcdiff = srcpitch - (width * 4);
 	IINT32 dstdiff = dstpitch - (width * 4);
@@ -2631,8 +2631,8 @@ static int ifilter_shrink_y_c(IUINT8 *dstpix, IUINT8 *srcpix, int width,
 	return 0;
 }
 
-static int ifilter_expand_x_c(IUINT8 *dstpix, IUINT8 *srcpix, int height,
-	long dstpitch, long srcpitch, int dstwidth, int srcwidth)
+static int ifilter_expand_x_c(IUINT8 *dstpix, const IUINT8 *srcpix, 
+	int height, long dstpitch, long srcpitch, int dstwidth, int srcwidth)
 {
 	IINT32 dstdiff = dstpitch - (dstwidth * 4);
 	IINT32 *xidx0, *xmult0, *xmult1;
@@ -2658,9 +2658,9 @@ static int ifilter_expand_x_c(IUINT8 *dstpix, IUINT8 *srcpix, int height,
 	}
 
 	for (y = 0; y < height; y++) {
-		IUINT8 *srcrow0 = srcpix + y * srcpitch;
+		const IUINT8 *srcrow0 = srcpix + y * srcpitch;
 		for (x = 0; x < dstwidth; x++) {
-			IUINT8 *src = srcrow0 + xidx0[x] * 4;
+			const IUINT8 *src = srcrow0 + xidx0[x] * 4;
 			IINT32 xm0 = xmult0[x];
 			IINT32 xm1 = xmult1[x];
 			*dstpix++ = (IUINT8)(((src[0] * xm0) + (src[4] * xm1)) >> 16);
@@ -2677,14 +2677,14 @@ static int ifilter_expand_x_c(IUINT8 *dstpix, IUINT8 *srcpix, int height,
 	return 0;
 }
 
-static int ifilter_expand_y_c(IUINT8 *dstpix, IUINT8 *srcpix, int width, 
-	long dstpitch, long srcpitch, int dstheight, int srcheight)
+static int ifilter_expand_y_c(IUINT8 *dstpix, const IUINT8 *srcpix, 
+	int width, long dstpitch, long srcpitch, int dstheight, int srcheight)
 {
 	IINT32 x, y;
 	for (y = 0; y < dstheight; y++) {
 		int yidx0 = y * (srcheight - 1) / dstheight;
-		IUINT8 *s0 = srcpix + yidx0 * srcpitch;
-		IUINT8 *s1 = s0 + srcpitch;
+		const IUINT8 *s0 = srcpix + yidx0 * srcpitch;
+		const IUINT8 *s1 = s0 + srcpitch;
 		int ym1 = 0x10000 * ((y * (srcheight - 1)) % dstheight) / dstheight;
 		int ym0 = 0x10000 - ym1;
 		for (x = 0; x < width; x++) {
@@ -2701,7 +2701,7 @@ static int ifilter_expand_y_c(IUINT8 *dstpix, IUINT8 *srcpix, int width,
 
 
 // 平滑缩放
-static int ipixel_smooth_resize(IUINT8 *dstpix, IUINT8 *srcpix, int dstwidth,
+int ipixel_smooth_resize(IUINT8 *dstpix, const IUINT8 *srcpix, int dstwidth,
 	int srcwidth, int dstheight, int srcheight, long dstpitch, long srcpitch)
 {
 	IUINT8 *temp = NULL;
