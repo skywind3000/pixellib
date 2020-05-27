@@ -34,8 +34,6 @@
  * - ipixel_clip: valid rectangle clip.
  * - ipixel_set_dots: batch draw dots from the pos array to a bitmap.
  * - ipixel_palette_fit: fint best fit color in the palette.
- * - ipixel_palette_fetch: fetch from color index buffer to A8R8G8B8.
- * - ipixel_palette_store: store from A8R8G8B8 to color index buffer.
  * - ipixel_card_reverse: reverse A8R8G8B8 scanline.
  * - ipixel_card_shuffle: color components shuffle.
  * - ipixel_card_multi: A8R8G8B8 scanline color multiplication.
@@ -617,13 +615,13 @@ typedef int (*iPixelCvt)(void *dbits, long dpitch, int dx, const void *sbits,
 	const iColorIndex *dindex, const iColorIndex *sindex);
 
 /* get converting procedure */
-iPixelCvt ipixel_cvt_get(int dfmt, int sfmt, int istransparent);
+iPixelCvt ipixel_cvt_get(int dfmt, int sfmt, int index);
 
 /* set converting procedure */
-void ipixel_cvt_set(int dfmt, int sfmt, int istransparent, iPixelCvt proc);
+void ipixel_cvt_set(int dfmt, int sfmt, int index, iPixelCvt proc);
 
-/* get converting procedure */
-iPixelCvt ipixel_cvt_get(int dfmt, int sfmt, int istransparent);
+
+#define IPIXEL_CVT_FLAG   8
 
 
 /* ipixel_convert: convert pixel format and blit
@@ -709,7 +707,8 @@ int ipixel_fmt_init(iPixelFmt *fmt, int depth,
  */
 long ipixel_fmt_cvt(const iPixelFmt *dfmt, void *dbits, long dpitch, 
 	int dx, const iPixelFmt *sfmt, const void *sbits, long spitch, int sx,
-	int sw, int sh, IUINT32 mask, int mode, void *mem);
+	int sw, int sh, IUINT32 mask, int mode, const iColorIndex *dindex,
+	const iColorIndex *sindex, void *mem);
 
 
 /**********************************************************************
@@ -2267,7 +2266,7 @@ extern IUINT32 _ipixel_cvt_lut_B2G2R2A2[256];
 		} \
     }   while (0)
 
-#define IPIXEL_FMT_FROM_RGBA(fmt, cc, r, g, b, a) do { \
+#define IRGBA_FMT_TO(fmt, cc, r, g, b, a) do { \
 		IUINT32 __X1 = ((r) >> (fmt)->rloss) << (fmt)->rshift; \
 		IUINT32 __X2 = ((g) >> (fmt)->gloss) << (fmt)->gshift; \
 		IUINT32 __X3 = ((b) >> (fmt)->bloss) << (fmt)->bshift; \
@@ -2275,7 +2274,7 @@ extern IUINT32 _ipixel_cvt_lut_B2G2R2A2[256];
 		(cc) = __X1 | __X2 | __X3 | __X4; \
 	} while (0)
 
-#define IPIXEL_FMT_TO_RGBA(fmt, cc, r, g, b, a) do { \
+#define IRGBA_FMT_FROM(fmt, cc, r, g, b, a) do { \
 		const IUINT8 *__rscale = &_ipixel_bit_scale[(fmt)->rloss][0]; \
 		const IUINT8 *__gscale = &_ipixel_bit_scale[(fmt)->gloss][0]; \
 		const IUINT8 *__bscale = &_ipixel_bit_scale[(fmt)->bloss][0]; \
@@ -2284,6 +2283,22 @@ extern IUINT32 _ipixel_cvt_lut_B2G2R2A2[256];
 		(g) = __gscale[((cc) & ((fmt)->gmask)) >> ((fmt)->gshift)]; \
 		(b) = __bscale[((cc) & ((fmt)->bmask)) >> ((fmt)->bshift)]; \
 		(a) = __ascale[((cc) & ((fmt)->amask)) >> ((fmt)->ashift)]; \
+	} while (0)
+
+#define IRGBA_FMT_DISEMBLE(fmt, c, r, g, b, a) do { \
+		if ((fmt)->format != IPIX_FMT_PACKED) { \
+			IRGBA_DISEMBLE((fmt)->format, c, r, g, b, a); \
+		}	else { \
+			IRGBA_FMT_FROM(fmt, c, r, g, b, a); \
+		} \
+	} while (0)
+
+#define IRGBA_FMT_ASSEMBLE(fmt, c, r, g, b, a) do { \
+		if ((fmt)->format != IPIX_FMT_PACKED) { \
+			IRGBA_ASSEMBLE((fmt)->format, c, r, g, b, a); \
+		}	else { \
+			IRGBA_FMT_TO(fmt, c, r, g, b, a); \
+		} \
 	} while (0)
 
 

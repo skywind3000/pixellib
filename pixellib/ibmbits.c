@@ -3037,6 +3037,7 @@ static struct iPixelHLineDrawProc ipixel_hline_proc_list[IPIX_FMT_COUNT] =
 #undef ITABLE_ITEM
 
 
+
 /* get a hline drawing function with given pixel format */
 iHLineDrawProc ipixel_get_hline_proc(int fmt, int op, int builtin)
 {
@@ -3678,6 +3679,9 @@ long ipixel_convert(int dfmt, void *dbits, long dpitch, int dx, int sfmt,
 	flip = mode & (IPIXEL_FLIP_HFLIP | IPIXEL_FLIP_VFLIP);
 	index = (mode & IPIXEL_BLIT_MASK)? 1 : 0;
 
+	if (mode & IPIXEL_CVT_FLAG) 
+		index = 2 + ((mode >> 8) & 3);
+
 	if (didx == NULL) didx = _ipixel_dst_index;
 	if (sidx == NULL) sidx = _ipixel_src_index;
 
@@ -3699,8 +3703,10 @@ long ipixel_convert(int dfmt, void *dbits, long dpitch, int dx, int sfmt,
 
 	/* without transparent color key using ipixel_blend */
 	if ((mode & IPIXEL_BLIT_MASK) == 0) {
+		int operator = IPIXEL_BLEND_OP_COPY;
+		if (mode & IPIXEL_CVT_FLAG) operator = ((mode >> 8) & 3);
 		return ipixel_blend(dfmt, dbits, dpitch, dx, sfmt, sbits, spitch, sx,
-			w, h, 0xffffffff, IPIXEL_BLEND_OP_COPY, flip, didx, sidx, mem);
+			w, h, 0xffffffff, operator, flip, didx, sidx, mem);
 	}
 
 	/* using ipixel_cvt_slow to proceed other convertion */
@@ -3988,8 +3994,11 @@ static int ipixel_fmt_reader_default(const iPixelFmt *fmt,
 /* ipixel_slow: default slow converter */
 long ipixel_fmt_slow(const iPixelFmt *dfmt, void *dbits, long dpitch, 
 	int dx, const iPixelFmt *sfmt, const void *sbits, long spitch, 
-	int sx, int w, int h, IUINT32 mask, int mode)
+	int sx, int w, int h, IUINT32 mask, int mode, 
+	const iColorIndex *dindex, const iColorIndex *sindex)
 {
+	const iColorIndex *_ipixel_dst_index = dindex;
+	const iColorIndex *_ipixel_src_index = sindex;
 	int flip, sbpp, dbpp, i, j;
 	int transparent;
 
@@ -4024,8 +4033,8 @@ long ipixel_fmt_slow(const iPixelFmt *dfmt, void *dbits, long dpitch,
 			if (transparent && cc == mask) 
 				continue;
 
-			IPIXEL_FMT_TO_RGBA(sfmt, cc, r, g, b, a);
-			IPIXEL_FMT_FROM_RGBA(dfmt, cc, r, g, b, a);
+			IRGBA_FMT_DISEMBLE(sfmt, cc, r, g, b, a);
+			IRGBA_FMT_ASSEMBLE(dfmt, cc, r, g, b, a);
 
 			switch (dbpp) {
 				case  1: _ipixel_store(1, dbits, x2, cc); break;
@@ -4066,7 +4075,8 @@ long ipixel_fmt_slow(const iPixelFmt *dfmt, void *dbits, long dpitch,
  */
 long ipixel_fmt_cvt(const iPixelFmt *dfmt, void *dbits, long dpitch, 
 	int dx, const iPixelFmt *sfmt, const void *sbits, long spitch, int sx,
-	int w, int h, IUINT32 mask, int mode, void *mem)
+	int w, int h, IUINT32 mask, int mode, const iColorIndex *sindex,
+	const iColorIndex *dindex, void *mem)
 {
 	if (mem == NULL) {
 		return (long)(w * sizeof(IUINT32));
@@ -4088,6 +4098,9 @@ long ipixel_fmt_cvt(const iPixelFmt *dfmt, void *dbits, long dpitch,
 		}
 	}
 
+	if (dindex == NULL) dindex = _ipixel_dst_index;
+	if (sindex == NULL) sindex = _ipixel_src_index;
+
 	if ((mode & IPIXEL_BLIT_MASK) == 0) {
 		iPixelFmtReader reader = ipixel_fmt_get_reader(sfmt->bpp, 0);
 		iPixelFmtWriter writer = ipixel_fmt_get_writer(dfmt->bpp, 0);
@@ -4106,7 +4119,7 @@ long ipixel_fmt_cvt(const iPixelFmt *dfmt, void *dbits, long dpitch,
 			} 
 			for (j = 0; j < h; j++) {
 				if (fetch) {
-					fetch(sbits, sx, w, card, NULL);
+					fetch(sbits, sx, w, card, sindex);
 				}	else {
 					reader(sfmt, sbits, sx, w, card);
 				}
@@ -4114,7 +4127,7 @@ long ipixel_fmt_cvt(const iPixelFmt *dfmt, void *dbits, long dpitch,
 					ipixel_card_reverse(card, w);
 				}
 				if (store) {
-					store(dbits, card, dx, w, NULL);
+					store(dbits, card, dx, w, dindex);
 				}	else {
 					writer(dfmt, dbits, dx, w, card);
 				}
@@ -4125,7 +4138,7 @@ long ipixel_fmt_cvt(const iPixelFmt *dfmt, void *dbits, long dpitch,
 		}
 	}
 	return ipixel_fmt_slow(dfmt, dbits, dpitch, dx, sfmt, sbits, spitch,
-			sx, w, h, mask, mode);
+			sx, w, h, mask, mode, dindex, sindex);
 }
 
 
