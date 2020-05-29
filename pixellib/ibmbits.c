@@ -37,7 +37,7 @@
  * - ipixel_palette_fetch: fetch from color index buffer to A8R8G8B8.
  * - ipixel_palette_store: store from A8R8G8B8 to color index buffer.
  * - ipixel_card_reverse: reverse A8R8G8B8 scanline.
- * - ipixel_card_shuffle: color components shuffle.
+ * - ipixel_card_permute: color components permute.
  * - ipixel_card_multi: A8R8G8B8 scanline color multiplication.
  * - ipixel_card_cover: A8R8G8B8 scanline coverage.
  *
@@ -2445,8 +2445,8 @@ void ipixel_card_over(IUINT32 *dst, int size, const IUINT32 *card,
 	ipixel_card_over_proc(dst, size, card, cover);
 }
 
-/* default card shuffle */
-static void ipixel_card_shuffle_default(IUINT32 *card, int w, 
+/* default card permute */
+static void ipixel_card_permute_default(IUINT32 *card, int w, 
 	int b0, int b1, int b2, int b3)
 {
 	IUINT8 *src = (IUINT8*)card;
@@ -2460,12 +2460,12 @@ static void ipixel_card_shuffle_default(IUINT32 *card, int w,
 	}
 }
 
-static void (*ipixel_card_shuffle_proc)(IUINT32*, int, int, int, int, int) = 
-	ipixel_card_shuffle_default;
+static void (*ipixel_card_permute_proc)(IUINT32*, int, int, int, int, int) = 
+	ipixel_card_permute_default;
 
-void ipixel_card_shuffle(IUINT32 *card, int w, int a, int b, int c, int d)
+void ipixel_card_permute(IUINT32 *card, int w, int a, int b, int c, int d)
 {
-	ipixel_card_shuffle_proc(card, w, a, b, c, d);
+	ipixel_card_permute_proc(card, w, a, b, c, d);
 }
 
 
@@ -2502,9 +2502,9 @@ void ipixel_card_set_proc(int id, void *proc)
 	}
 	else if (id == 4) {
 		if (proc == NULL) 
-			ipixel_card_shuffle_proc = ipixel_card_shuffle_default;
+			ipixel_card_permute_proc = ipixel_card_permute_default;
 		else
-			ipixel_card_shuffle_proc = 
+			ipixel_card_permute_proc = 
 				(void (*)(IUINT32*, int, int, int, int, int))proc;
 	}
 }
@@ -3723,6 +3723,8 @@ long ipixel_convert(int dfmt, void *dbits, long dpitch, int dx, int sfmt,
 
 static iPixelFmtReader ipixel_fmt_reader[4] = { NULL, NULL, NULL, NULL };
 static iPixelFmtWriter ipixel_fmt_writer[4] = { NULL, NULL, NULL, NULL };
+static iPixelFmtPermute ipixel_fmt_permutor[2][2] = 
+	{ {NULL, NULL}, {NULL, NULL} };
 
 /* default free format reader */
 static int ipixel_fmt_reader_default(const iPixelFmt *fmt, 
@@ -3731,6 +3733,10 @@ static int ipixel_fmt_reader_default(const iPixelFmt *fmt,
 /* default free format writer */
 static int ipixel_fmt_writer_default(const iPixelFmt *fmt,
 	void *bits, int x, int w, const IUINT32 *card);
+
+/* default permute proc */
+static int ipixel_fmt_permute_default(int dbpp, IUINT8 *dst, int w, int step,
+	int sbpp, const IUINT8 *src, const int *pos, IUINT32 mask, int mode);
 
 
 /* ipixel_fmt_init: init pixel format structure
@@ -3854,6 +3860,27 @@ iPixelFmtWriter ipixel_fmt_get_writer(int depth, int isdefault)
 	return ipixel_fmt_writer[index];
 }
 
+/* setup permute proc */
+void ipixel_fmt_set_permute(int dbpp, int sbpp, iPixelFmtPermute permute)
+{
+	int dpos = (dbpp == 32)? 0 : 1;
+	int spos = (sbpp == 32)? 0 : 1;
+	ipixel_fmt_permutor[dpos][spos] = permute;
+}
+
+/* get permute proc */
+iPixelFmtPermute ipixel_fmt_get_permute(int dbpp, int sbpp, int isdefault)
+{
+	if (isdefault) {
+		return ipixel_fmt_permute_default;
+	}
+	else {
+		int dpos = (dbpp == 32)? 0 : 1;
+		int spos = (sbpp == 32)? 0 : 1;
+		iPixelFmtPermute proc = ipixel_fmt_permutor[dpos][spos];
+		return (proc)? proc : ipixel_fmt_permute_default;
+	}
+}
 
 /* free format defaut writer */
 static int ipixel_fmt_writer_default(const iPixelFmt *fmt,
@@ -4054,6 +4081,182 @@ long ipixel_fmt_slow(const iPixelFmt *dfmt, void *dbits, long dpitch,
 }
 
 
+/* calculate position */
+static int ipixel_fmt_position(int shift) 
+{
+#if IPIXEL_BIG_ENDIAN
+	int table[] = {3, -1, -1, -1, -1, -1, -1, -1, 2, -1, -1, -1, 
+		-1, -1, -1, -1, 1, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1, 
+		-1, -1, -1, -1, -1, -1};
+#else
+	int table[] = {0, -1, -1, -1, -1, -1, -1, -1, 1, -1, -1, -1, -1, 
+		-1, -1, -1, 2, -1, -1, -1, -1, -1, -1, -1, 3, -1, -1, -1, -1,
+		-1, -1, -1, -1};
+#endif
+	return table[shift];
+}
+
+/* default permute proc */
+static int ipixel_fmt_permute_default(int dbpp, IUINT8 *dst, int w, int step,
+	int sbpp, const IUINT8 *src, const int *pos, IUINT32 mask, int mode)
+{
+	IUINT32 cc = 0;
+	int b0 = pos[0];
+	int b1 = pos[1];
+	int b2 = pos[2];
+	int b3 = pos[3];
+	int ba = pos[4];
+	if (dbpp == 32) {
+		if (sbpp == 32) {
+			if ((mode & IPIXEL_BLIT_MASK) == 0) {
+				for (; w > 0; src += 4, dst += step, w--) {
+					dst[0] = src[b0];
+					dst[1] = src[b1];
+					dst[2] = src[b2];
+					dst[3] = src[b3];
+				}
+			}	else {
+				for (; w > 0; src += 4, dst += step, w--) {
+					cc = _ipixel_fetch(32, src, 0);
+					if (cc != mask) {
+						dst[0] = src[b0];
+						dst[1] = src[b1];
+						dst[2] = src[b2];
+						dst[3] = src[b3];
+					}
+				}
+			}
+		}
+		else {
+			if ((mode & IPIXEL_BLIT_MASK) == 0) {
+				for (; w > 0; src += 4, dst += step, w--) {
+					dst[0] = src[b0];
+					dst[1] = src[b1];
+					dst[2] = src[b2];
+					dst[3] = src[b3];
+					dst[ba] = 0xff;
+				}
+			}	else {
+				for (; w > 0; src += 4, dst += step, w--) {
+					cc = _ipixel_fetch(32, src, 0);
+					if (cc != mask) {
+						dst[0] = src[b0];
+						dst[1] = src[b1];
+						dst[2] = src[b2];
+						dst[3] = src[b3];
+						dst[ba] = 0xff;
+					}
+				}
+			}
+		}
+	}
+	else {
+		if (sbpp == 32) {
+			if ((mode & IPIXEL_BLIT_MASK) == 0) {
+				for (; w > 0; src += 4, dst += step, w--) {
+					dst[0] = src[b0];
+					dst[1] = src[b1];
+					dst[2] = src[b2];
+				}
+			}	else {
+				for (; w > 0; src += 4, dst += step, w--) {
+					cc = _ipixel_fetch(32, src, 0);
+					if (cc != mask) {
+						dst[0] = src[b0];
+						dst[1] = src[b1];
+						dst[2] = src[b2];
+					}
+				}
+			}
+		}
+		else {
+			if ((mode & IPIXEL_BLIT_MASK) == 0) {
+				for (; w > 0; src += 3, dst += step, w--) {
+					dst[0] = src[b0];
+					dst[1] = src[b1];
+					dst[2] = src[b2];
+				}
+			}	else {
+				for (; w > 0; src += 3, dst += step, w--) {
+					cc = _ipixel_fetch(24, src, 0);
+					if (cc != mask) {
+						dst[0] = src[b0];
+						dst[1] = src[b1];
+						dst[2] = src[b2];
+					}
+				}
+			}
+		}
+	}
+	return 0;
+}
+
+/* permute format */
+int ipixel_fmt_permute(const iPixelFmt *dfmt, void *dbits, long dpitch,
+	int dx, const iPixelFmt *sfmt, const void *sbits, long spitch, 
+	int sx, int w, int h, IUINT32 mask, int mode)
+{
+	int sr, sg, sb, sa, dr, dg, db, da;
+	int pos[5] = { 0, 0, 0, 0, 0 };
+	int dbytes, sbytes, step, dbpp, sbpp;
+	iPixelFmtPermute permutor = NULL;
+	
+	dbytes = (dfmt->bpp + 7) / 8;
+	sbytes = (sfmt->bpp + 7) / 8;
+
+	if (sfmt->bpp != 24 && sfmt->bpp != 32)
+		return -1;
+	if (dfmt->bpp != 24 && dfmt->bpp != 32)
+		return -2;
+	if (dfmt->aloss != sfmt->aloss)
+		return -3;
+
+	sr = ipixel_fmt_position(sfmt->rshift);
+	sg = ipixel_fmt_position(sfmt->gshift);
+	sb = ipixel_fmt_position(sfmt->bshift);
+	sa = ipixel_fmt_position(sfmt->ashift);
+	dr = ipixel_fmt_position(dfmt->rshift);
+	dg = ipixel_fmt_position(dfmt->gshift);
+	db = ipixel_fmt_position(dfmt->bshift);
+	da = ipixel_fmt_position(dfmt->ashift);
+
+	if ((sr | sg | sb | sa | dr | dg | db | da) < 0) 
+		return -4;
+
+	pos[dr] = sr;
+	pos[dg] = sg;
+	pos[db] = sb;
+	pos[da] = sa;
+	pos[4] = da;
+
+	if (mode & IPIXEL_FLIP_VFLIP) { 
+		sbits = (const IUINT8*)sbits + spitch * (h - 1); 
+		spitch = -spitch; 
+	}
+
+	dbpp = dfmt->bpp;
+	sbpp = sfmt->bpp;
+
+	permutor = ipixel_fmt_get_permute(dfmt->bpp, sfmt->bpp, 0);
+
+	for (; h > 0; h--) {
+		const IUINT8 *src = ((const IUINT8*)sbits) + sx * sbytes;
+		IUINT8 *dst = ((IUINT8*)dbits) + dx * dbytes;
+		if ((mode & IPIXEL_FLIP_HFLIP) == 0) {
+			step = dbytes;
+		}	else {
+			dst += (w - 1) * dbytes;
+			step = -dbytes;
+		}
+		permutor(dbpp, dst, w, step, sbpp, src, pos, mask, mode);
+		sbits = (const IUINT8*)sbits + spitch;
+		dbits = (IUINT8*)dbits + dpitch;
+	}
+
+	return 0;
+}
+
+
 /* ipixel_fmt_cvt: free format convert
  * you must provide a working memory pointer to mem. if mem eq NULL,
  * this function will do nothing but returns how many bytes needed in mem
@@ -4100,6 +4303,16 @@ long ipixel_fmt_cvt(const iPixelFmt *dfmt, void *dbits, long dpitch,
 
 	if (dindex == NULL) dindex = _ipixel_dst_index;
 	if (sindex == NULL) sindex = _ipixel_src_index;
+
+	if (sfmt->rloss + sfmt->gloss + sfmt->bloss == 0) {
+		if (dfmt->rloss + dfmt->gloss + dfmt->bloss == 0) {
+			int hh = ipixel_fmt_permute(dfmt, dbits, dpitch, dx,
+					sfmt, sbits, spitch, sx, w, h, mask, mode);
+			if (hh == 0) {
+				return 0;
+			}
+		}
+	}
 
 	if ((mode & IPIXEL_BLIT_MASK) == 0) {
 		iPixelFmtReader reader = ipixel_fmt_get_reader(sfmt->bpp, 0);

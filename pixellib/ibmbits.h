@@ -35,7 +35,7 @@
  * - ipixel_set_dots: batch draw dots from the pos array to a bitmap.
  * - ipixel_palette_fit: fint best fit color in the palette.
  * - ipixel_card_reverse: reverse A8R8G8B8 scanline.
- * - ipixel_card_shuffle: color components shuffle.
+ * - ipixel_card_permute: color components permute.
  * - ipixel_card_multi: A8R8G8B8 scanline color multiplication.
  * - ipixel_card_cover: A8R8G8B8 scanline coverage.
  *
@@ -598,8 +598,8 @@ void ipixel_card_cover(IUINT32 *card, int size, const IUINT8 *cover);
 void ipixel_card_over(IUINT32 *dst, int size, const IUINT32 *card, 
 	const IUINT8 *cover);
 
-/* card shuffle */
-void ipixel_card_shuffle(IUINT32 *card, int w, int a, int b, int c, int d);
+/* card permute */
+void ipixel_card_permute(IUINT32 *card, int w, int a, int b, int c, int d);
 
 /* card proc set */
 void ipixel_card_set_proc(int id, void *proc);
@@ -662,11 +662,18 @@ typedef int (*iPixelFmtReader)(const iPixelFmt *fmt,
 typedef int (*iPixelFmtWriter)(const iPixelFmt *fmt,
 		void *bits, int x, int w, const IUINT32 *card);
 
+/* byte permute for 24/32 bits */
+typedef int (*iPixelFmtPermute)(int dbpp, IUINT8 *dst, int w, int step, 
+		int sbpp, const IUINT8 *src, const int *pos, IUINT32 mask, int mode);
+
 /* set free format reader */
 void ipixel_fmt_set_reader(int depth, iPixelFmtReader reader);
 
 /* set free format writer */
 void ipixel_fmt_set_writer(int depth, iPixelFmtWriter writer);
+
+/* set permute */
+void ipixel_fmt_set_permute(int dbpp, int sbpp, iPixelFmtPermute permute);
 
 /* get free format reader */
 iPixelFmtReader ipixel_fmt_get_reader(int depth, int isdefault);
@@ -674,6 +681,8 @@ iPixelFmtReader ipixel_fmt_get_reader(int depth, int isdefault);
 /* get free format writer */
 iPixelFmtWriter ipixel_fmt_get_writer(int depth, int isdefault);
 
+/* get permute */
+iPixelFmtPermute ipixel_fmt_get_permute(int dpp, int sbpp, int isdefault);
 
 /* ipixel_fmt_init: init pixel format structure
  * depth: color bits, one of 8, 16, 24, 32
@@ -1190,6 +1199,10 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 #define _ipixel_fast_div_255(x) (((x) + (((x) + 257) >> 8)) >> 8)
 #define _ipixel_8_to_9(x) (((color) >> 7) + (color << 1))
 #define _ipixel_8_to_10(x) (((color) >> 6) + (color << 2))
+
+#define _ipixel_clamp_to_0(x) ((-((IINT32)(x)) >> 31) & ((IINT32)(x)))
+#define _ipixel_clamp_to_255(x) \
+        ((((255 - ((IINT32)(x))) >> 31) | ((IINT32)(x))) & 255)
 
 #define _ipixel_to_gray(r, g, b) \
         ((19595 * (r) + 38469 * (g) + 7472 * (b)) >> 16)
