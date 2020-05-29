@@ -4106,6 +4106,7 @@ static int ipixel_fmt_permute_default(int dbpp, IUINT8 *dst, int w, int step,
 	int b2 = pos[2];
 	int b3 = pos[3];
 	int ba = pos[4];
+	int ca = pos[5];
 	if (dbpp == 32) {
 		if (sbpp == 32) {
 			if ((mode & IPIXEL_BLIT_MASK) == 0) {
@@ -4134,7 +4135,7 @@ static int ipixel_fmt_permute_default(int dbpp, IUINT8 *dst, int w, int step,
 					dst[1] = src[b1];
 					dst[2] = src[b2];
 					dst[3] = src[b3];
-					dst[ba] = 0xff;
+					dst[ba] = ca;
 				}
 			}	else {
 				for (; w > 0; src += 4, dst += step, w--) {
@@ -4144,7 +4145,7 @@ static int ipixel_fmt_permute_default(int dbpp, IUINT8 *dst, int w, int step,
 						dst[1] = src[b1];
 						dst[2] = src[b2];
 						dst[3] = src[b3];
-						dst[ba] = 0xff;
+						dst[ba] = ca;
 					}
 				}
 			}
@@ -4197,7 +4198,7 @@ int ipixel_fmt_permute(const iPixelFmt *dfmt, void *dbits, long dpitch,
 	int sx, int w, int h, IUINT32 mask, int mode)
 {
 	int sr, sg, sb, sa, dr, dg, db, da;
-	int pos[5] = { 0, 0, 0, 0, 0 };
+	int pos[6] = { 0, 0, 0, 0, 0, 0 };
 	int dbytes, sbytes, step, dbpp, sbpp;
 	iPixelFmtPermute permutor = NULL;
 	
@@ -4228,6 +4229,7 @@ int ipixel_fmt_permute(const iPixelFmt *dfmt, void *dbits, long dpitch,
 	pos[db] = sb;
 	pos[da] = sa;
 	pos[4] = da;
+	pos[5] = (dfmt->amask == 0)? 0 : 255;
 
 	if (mode & IPIXEL_FLIP_VFLIP) { 
 		sbits = (const IUINT8*)sbits + spitch * (h - 1); 
