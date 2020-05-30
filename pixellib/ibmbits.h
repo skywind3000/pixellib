@@ -376,9 +376,6 @@ extern iColorIndex *_ipixel_dst_index;
 /* default palette */
 extern IRGB _ipaletted[256];
 
-extern const unsigned char IMINMAX256[770];
-extern const unsigned char *iclip256;
-
 /* pixel alpha lookup table: initialized by ipixel_lut_init() */
 extern unsigned char ipixel_blend_lut[2048 * 2];
 
@@ -389,9 +386,9 @@ extern unsigned char _ipixel_divlut[256][256];  /* [x][y] = y * 255 / x */
 /* color component scale for 0-8 bits */
 extern unsigned char _ipixel_bit_scale[9][256];
 
-#define ICLIP_256(x) IMINMAX256[256 + (x)]
+#define ICLIP_256(x) ((((255 - ((IINT32)(x))) >> 31) | ((IINT32)(x))) & 255)
 #define ICLIP_FAST(x) ( (IUINT32) ( (IUINT8) ((x) | (0 - ((x) >> 8))) ) )
-
+#define ICLIP_ZERO(x) ((-((IINT32)(x)) >> 31) & ((IINT32)(x)))
 
 #define IPIXEL_FORMAT_BPP(pixfmt)      ipixelfmt[pixfmt].bpp
 #define IPIXEL_FORMAT_TYPE(pixfmt)     ipixelfmt[pixfmt].type
@@ -2458,13 +2455,10 @@ extern IUINT32 _ipixel_cvt_lut_B2G2R2A2[256];
 		IINT32 XR = (sr) * XA; \
 		IINT32 XG = (sg) * XA; \
 		IINT32 XB = (sb) * XA; \
-		XR = XR >> 8; \
-		XG = XG >> 8; \
-		XB = XB >> 8; \
 		XA = (sa) + (da); \
-		XR += (dr); \
-		XG += (dg); \
-		XB += (db); \
+		XR = (XR >> 8) + (dr); \
+		XG = (XG >> 8) + (dg); \
+		XB = (XB >> 8) + (db); \
 		(dr) = ICLIP_256(XR); \
 		(dg) = ICLIP_256(XG); \
 		(db) = ICLIP_256(XB); \
