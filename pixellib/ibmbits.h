@@ -35,7 +35,7 @@
  * - ipixel_set_dots: batch draw dots from the pos array to a bitmap.
  * - ipixel_palette_fit: fint best fit color in the palette.
  * - ipixel_card_reverse: reverse A8R8G8B8 scanline.
- * - ipixel_card_shuffle: color components shuffle.
+ * - ipixel_card_permute: color components permute.
  * - ipixel_card_multi: A8R8G8B8 scanline color multiplication.
  * - ipixel_card_cover: A8R8G8B8 scanline coverage.
  *
@@ -376,9 +376,6 @@ extern iColorIndex *_ipixel_dst_index;
 /* default palette */
 extern IRGB _ipaletted[256];
 
-extern const unsigned char IMINMAX256[770];
-extern const unsigned char *iclip256;
-
 /* pixel alpha lookup table: initialized by ipixel_lut_init() */
 extern unsigned char ipixel_blend_lut[2048 * 2];
 
@@ -389,9 +386,9 @@ extern unsigned char _ipixel_divlut[256][256];  /* [x][y] = y * 255 / x */
 /* color component scale for 0-8 bits */
 extern unsigned char _ipixel_bit_scale[9][256];
 
-#define ICLIP_256(x) IMINMAX256[256 + (x)]
+#define ICLIP_256(x) ((((255 - ((IINT32)(x))) >> 31) | ((IINT32)(x))) & 255)
 #define ICLIP_FAST(x) ( (IUINT32) ( (IUINT8) ((x) | (0 - ((x) >> 8))) ) )
-
+#define ICLIP_ZERO(x) ((-((IINT32)(x)) >> 31) & ((IINT32)(x)))
 
 #define IPIXEL_FORMAT_BPP(pixfmt)      ipixelfmt[pixfmt].bpp
 #define IPIXEL_FORMAT_TYPE(pixfmt)     ipixelfmt[pixfmt].type
@@ -598,8 +595,8 @@ void ipixel_card_cover(IUINT32 *card, int size, const IUINT8 *cover);
 void ipixel_card_over(IUINT32 *dst, int size, const IUINT32 *card, 
 	const IUINT8 *cover);
 
-/* card shuffle */
-void ipixel_card_shuffle(IUINT32 *card, int w, int a, int b, int c, int d);
+/* card permute */
+void ipixel_card_permute(IUINT32 *card, int w, int a, int b, int c, int d);
 
 /* card proc set */
 void ipixel_card_set_proc(int id, void *proc);
@@ -662,11 +659,18 @@ typedef int (*iPixelFmtReader)(const iPixelFmt *fmt,
 typedef int (*iPixelFmtWriter)(const iPixelFmt *fmt,
 		void *bits, int x, int w, const IUINT32 *card);
 
+/* byte permute for 24/32 bits */
+typedef int (*iPixelFmtPermute)(int dbpp, IUINT8 *dst, int w, int step, 
+		int sbpp, const IUINT8 *src, const int *pos, IUINT32 mask, int mode);
+
 /* set free format reader */
 void ipixel_fmt_set_reader(int depth, iPixelFmtReader reader);
 
 /* set free format writer */
 void ipixel_fmt_set_writer(int depth, iPixelFmtWriter writer);
+
+/* set permute */
+void ipixel_fmt_set_permute(int dbpp, int sbpp, iPixelFmtPermute permute);
 
 /* get free format reader */
 iPixelFmtReader ipixel_fmt_get_reader(int depth, int isdefault);
@@ -674,6 +678,8 @@ iPixelFmtReader ipixel_fmt_get_reader(int depth, int isdefault);
 /* get free format writer */
 iPixelFmtWriter ipixel_fmt_get_writer(int depth, int isdefault);
 
+/* get permute */
+iPixelFmtPermute ipixel_fmt_get_permute(int dpp, int sbpp, int isdefault);
 
 /* ipixel_fmt_init: init pixel format structure
  * depth: color bits, one of 8, 16, 24, 32
@@ -1191,6 +1197,10 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 #define _ipixel_8_to_9(x) (((color) >> 7) + (color << 1))
 #define _ipixel_8_to_10(x) (((color) >> 6) + (color << 2))
 
+#define _ipixel_clamp_to_0(x) ((-((IINT32)(x)) >> 31) & ((IINT32)(x)))
+#define _ipixel_clamp_to_255(x) \
+        ((((255 - ((IINT32)(x))) >> 31) | ((IINT32)(x))) & 255)
+
 #define _ipixel_to_gray(r, g, b) \
         ((19595 * (r) + 38469 * (g) + 7472 * (b)) >> 16)
 
@@ -1332,9 +1342,8 @@ int ipixel_set_dots(int bpp, void *bits, long pitch, int w, int h,
 #ifndef ILINS_LOOP_DOUBLE
 #define ILINS_LOOP_DOUBLE(actionx1, actionx2, width) do { \
 	unsigned long __width = (unsigned long)(width); \
-	unsigned long __increment = __width >> 2; \
-	for (; __increment > 0; __increment--) { actionx2; actionx2; } \
-	if (__width & 2) { actionx2; } \
+	unsigned long __increment = __width >> 1; \
+	for (; __increment > 0; __increment--) { actionx2; } \
 	if (__width & 1) { actionx1; }  \
 }	while (0)
 #endif
@@ -2308,10 +2317,8 @@ extern IUINT32 _ipixel_cvt_lut_B2G2R2A2[256];
  **********************************************************************/
 #define _ipixel_fill_32(__bits, __startx, __size, __cc) do { \
 		IUINT32 *__ptr = (IUINT32*)(__bits) + (__startx); \
-		ILINS_LOOP_DOUBLE( \
-			{ *__ptr++ = (IUINT32)(__cc); }, \
-			{ *__ptr++ = (IUINT32)(__cc); *__ptr++ = (IUINT32)(__cc); }, \
-			__size); \
+		size_t __width = (size_t)(__size); \
+		for (; __width > 0; __width--) { *__ptr++ = (IUINT32)(__cc); } \
 	}	while (0)
 
 #define _ipixel_fill_24(__bits, __startx, __size, __cc) do { \
@@ -2335,34 +2342,17 @@ extern IUINT32 _ipixel_cvt_lut_B2G2R2A2[256];
 	}	while (0)
 
 #define _ipixel_fill_16(__bits, __startx, __size, __cc) do { \
-		IUINT8 *__ptr = (IUINT8*)(__bits) + (__startx) * 2; \
-		IUINT32 __c1 = (__cc) & 0xffff; \
-		IUINT32 __c2 = (__c1 << 16) | __c1; \
-		size_t __length = __size; \
-		if ((((size_t)__ptr) & 2) && __length > 0) { \
-			*(IUINT16*)__ptr = (IUINT16)__c1; \
-			__ptr += 2; __length--; \
-		} \
-		ILINS_LOOP_DOUBLE( \
-			{	*(IUINT16*)__ptr = (IUINT16)__c1; __ptr += 2; }, \
-			{	*(IUINT32*)__ptr = (IUINT32)__c2; __ptr += 4; }, \
-			__length); \
+		IUINT16 *__ptr = ((IUINT16*)(__bits)) + (__startx); \
+		IUINT16 __c1 = (IUINT16)((__cc) & 0xffff); \
+		size_t __width = (size_t)(__size); \
+		for (; __width > 0; __width--) { *__ptr++ = __c1; } \
 	}	while (0)
 
 #define _ipixel_fill_8(__bits, __startx, __size, __cc) do { \
-		IUINT8 *__ptr = (IUINT8*)(__bits) + (__startx); \
-		if (__size <= 64) { \
-			IUINT32 __c1 = (__cc) & 0xff; \
-			IUINT32 __c2 = (__c1 << 8) | __c1; \
-			IUINT32 __c4 = (__c2 << 16) | __c2; \
-			ILINS_LOOP_QUATRO( \
-				{	*__ptr++ = (IUINT8)__c1; }, \
-				{	*(IUINT16*)__ptr = (IUINT16)__c2; __ptr += 2; }, \
-				{	*(IUINT32*)__ptr = (IUINT32)__c4; __ptr += 4; }, \
-				__size); \
-		}	else { \
-			memset(__ptr, (IUINT8)(__cc), __size); \
-		} \
+		IUINT8 *__ptr = ((IUINT8*)(__bits)) + (__startx); \
+		IUINT8 __c1 = (IUINT8)((__cc) & 0xff); \
+		size_t __width = (size_t)(__size); \
+		for (; __width > 0; __width--) { *__ptr++ = __c1; } \
 	}	while (0)
 
 #define _ipixel_fill_4(__bits, __startx, __size, __cc) do { \
@@ -2445,13 +2435,10 @@ extern IUINT32 _ipixel_cvt_lut_B2G2R2A2[256];
 		IINT32 XR = (sr) * XA; \
 		IINT32 XG = (sg) * XA; \
 		IINT32 XB = (sb) * XA; \
-		XR = XR >> 8; \
-		XG = XG >> 8; \
-		XB = XB >> 8; \
 		XA = (sa) + (da); \
-		XR += (dr); \
-		XG += (dg); \
-		XB += (db); \
+		XR = (XR >> 8) + (dr); \
+		XG = (XG >> 8) + (dg); \
+		XB = (XB >> 8) + (db); \
 		(dr) = ICLIP_256(XR); \
 		(dg) = ICLIP_256(XG); \
 		(db) = ICLIP_256(XB); \
